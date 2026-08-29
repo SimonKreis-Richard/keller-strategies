@@ -1,0 +1,38 @@
+# Environments
+venv/
+env/
+.env
+.venv
+test_env/
+tmp_venv/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Personal settings (account balances, strategy picks...) — never committed
+user_config.json
+
+# Temporary data and logs
+*.csv
+*.log
+*.sqlite
+backtest_results/*
+!backtest_results/.gitkeep
+data/cache/
+
+# Frozen test fixtures ARE tracked: the golden master and the guard regression tests
+# are worthless if the data underneath them can drift. See tests/fixtures/MANIFEST.md.
+!tests/fixtures/*.csv
+
+# IDEs & local agent tooling
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# OS config
+.DS_Store
+Thumbs.db
