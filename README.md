@@ -4,7 +4,7 @@
 ![NiceGUI](https://img.shields.io/badge/NiceGUI-3.0%2B-5898D4)
 ![pandas](https://img.shields.io/badge/pandas-2.0%2B-150458?logo=pandas&logoColor=white)
 ![NumPy](https://img.shields.io/badge/NumPy-1.24%2B-013243?logo=numpy&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-466%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-467%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 An open-source Python engine for backtesting and live-execution of state-of-the-art

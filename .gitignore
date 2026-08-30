@@ -26,12 +26,24 @@ data/cache/
 # are worthless if the data underneath them can drift. See tests/fixtures/MANIFEST.md.
 !tests/fixtures/*.csv
 
-# IDEs & local agent tooling
+# IDEs
 .idea/
 .vscode/
-.claude/
 *.swp
 *.swo
+
+# Agent tooling and project context -- LOCAL ONLY, never published.
+# This repository is public. The agent guides, the decision record and the skills describe
+# how this project is worked on and what its owner decided and why; they are working
+# material, not part of the software anyone clones. Everything in this block stays on the
+# machine. (The software's own install and usage instructions live in README.md, which IS
+# public -- do not move them in here.)
+.claude/
+.agents/
+AGENTS.md
+CLAUDE.md
+SETUP.md
+memory/
 
 # OS config
 .DS_Store

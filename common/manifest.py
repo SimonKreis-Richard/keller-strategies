@@ -32,9 +32,17 @@ _REDACT = {'BROKER_ACCOUNTS', 'ACCOUNT_BALANCE', 'ACCOUNTS'}
 
 
 def _git(*args, cwd=None):
+    # encoding is explicit because `text=True` alone decodes with the platform's preferred
+    # codec -- cp1252 on Windows -- and `git diff` output carries whatever characters the
+    # tracked files carry. A single accented letter or arrow in the diff raised
+    # UnicodeDecodeError inside subprocess's reader thread, the `except` below swallowed it,
+    # and `git_state` then reported a MODIFIED worktree as `dirty: False` with no diff hash:
+    # the exact "same commit silently means same code" failure the docstring below forbids.
+    # `errors='replace'` keeps a stray byte from ever re-opening that hole -- the hash only
+    # has to be stable and change-sensitive, not byte-faithful.
     try:
         out = subprocess.run(('git',) + args, cwd=cwd, capture_output=True, text=True,
-                             timeout=10)
+                             encoding='utf-8', errors='replace', timeout=10)
         return out.stdout.strip() if out.returncode == 0 else None
     except Exception:
         return None

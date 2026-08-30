@@ -805,6 +805,58 @@ class TestTheManifestRecordsWhatTheLedgerDoesNotDo(unittest.TestCase):
         self.assertIn('CONSTRUCTED', entry['rf_desc'] or '',
                       'a Sharpe against an accrued rate must say so where it is stored')
 
+    def test_a_dirty_worktree_is_never_reported_as_clean(self):
+        """Found 2026-08-29. `_git` ran with `text=True` and no explicit encoding, so on
+        Windows it decoded git's output as cp1252. One accented character anywhere in the
+        diff raised UnicodeDecodeError inside subprocess's reader thread, the broad `except`
+        returned None, and `git_state` reported a MODIFIED tree as `dirty: False` with no
+        diff hash — silently, in the permissive direction, in the provenance layer that
+        stamps every saved report.
+
+        Built on a throwaway repository so it asserts the behaviour rather than the state of
+        whatever tree the suite happens to run in.
+        """
+        import subprocess
+        import tempfile
+        from common.manifest import git_state
+
+        if subprocess.run(('git', '--version'), capture_output=True).returncode != 0:
+            self.skipTest('git not available')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            def git(*args):
+                subprocess.run(('git',) + args, cwd=tmp, capture_output=True, check=True)
+
+            git('init', '-q')
+            git('config', 'user.email', 'test@example.invalid')
+            git('config', 'user.name', 'Test')
+            target = os.path.join(tmp, 'note.md')
+            with open(target, 'w', encoding='utf-8') as fh:
+                fh.write('plain ascii\n')
+            git('add', '-A')
+            git('commit', '-qm', 'initial')
+
+            self.assertFalse(git_state(tmp)['dirty'], 'an untouched tree is clean')
+
+            # The choice of character is the whole test, so it is written as an escape and
+            # explained. cp1252 leaves 0x81/0x8D/0x8F/0x90/0x9D UNDEFINED; every other byte
+            # decodes to something. U+FE0F (the emoji variation selector, the invisible half
+            # of "⚠️") encodes to EF B8 8F, and that 0x8F is what raises. A plain accented
+            # letter or an em dash would NOT reproduce the bug — cp1252 decodes those to
+            # mojibake without complaint — so do not "simplify" this string: it would leave
+            # the test passing against the defect, which is how it was first written.
+            with open(target, 'w', encoding='utf-8') as fh:
+                fh.write('modified ⚠️ — the diff now carries a byte cp1252 '
+                         'cannot decode\n')
+
+            state = git_state(tmp)
+            self.assertTrue(state['dirty'],
+                            'a modified worktree must report dirty even when the diff is '
+                            'not ASCII — "same commit" must never silently mean "same code"')
+            self.assertIsNotNone(state['diff_sha256'],
+                                 'a dirty tree must carry a diff hash to distinguish it '
+                                 'from another dirty tree at the same commit')
+
     def test_no_balance_reaches_the_manifest(self):
         """The manifest is a public artefact and user_config.json is gitignored. This is the
         seam where a real balance could cross into the repository."""

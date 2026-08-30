@@ -686,17 +686,45 @@ class TestDocsQuoteTheRegistrySize(unittest.TestCase):
     count is a cache of the registry, and caches need invalidation.
     """
 
-    DOCS = ('README.md', 'AGENTS.md', 'ARCHITECTURE.md', 'KNOWN_GAPS.md')
+    #: Documents that SHIP. They are in the public repository, so a fresh clone must contain
+    #: every one of them and a missing entry is a failure, not a skip.
+    DOCS = ('README.md', 'ARCHITECTURE.md', 'KNOWN_GAPS.md')
 
-    def _read(self, name):
+    #: Agent-facing documents. They are gitignored and exist only on a working machine, but
+    #: they quote the same registry counts and go stale in exactly the same way, so they are
+    #: pinned WHEN PRESENT and passed over when absent. A public clone has none of them and
+    #: must still go green -- which is why they cannot simply be added to DOCS above.
+    LOCAL_DOCS = ('AGENTS.md', 'CLAUDE.md', 'SETUP.md',
+                  os.path.join('memory', 'PROJECT.md'))
+
+    def _documents(self):
+        """Yield (name, text) for every document this checkout actually has.
+
+        A doc listed in DOCS and missing is a FAILURE naming the tuple, never a bare
+        FileNotFoundError. On 2026-08-19 `AGENTS.md` was renamed to `CLAUDE.md` without
+        updating the list, and the suite went red with a stack trace that named the symptom
+        and not the cause.
+        """
         root = os.path.join(os.path.dirname(__file__), '..')
-        with open(os.path.join(root, name), encoding='utf-8') as fh:
-            return fh.read()
+        for name in self.DOCS:
+            path = os.path.join(root, name)
+            if not os.path.exists(path):
+                self.fail(
+                    f'{name} is listed in DOCS but does not exist. If it was renamed or '
+                    f'retired, update TestDocsQuoteTheRegistrySize.DOCS in the same commit '
+                    f'-- that tuple is the list of published documents whose prose is '
+                    f'pinned. If it became local-only, move it to LOCAL_DOCS.')
+            with open(path, encoding='utf-8') as fh:
+                yield name, fh.read()
+        for name in self.LOCAL_DOCS:
+            path = os.path.join(root, name)
+            if os.path.exists(path):
+                with open(path, encoding='utf-8') as fh:
+                    yield name, fh.read()
 
     def test_no_doc_claims_the_registry_is_all_2x(self):
-        for name in self.DOCS:
+        for name, text in self._documents():
             with self.subTest(doc=name):
-                text = self._read(name)
                 self.assertNotIn('registry is all-2x', text,
                                  f'{name} still claims the registry is all-2x; twelve 3x '
                                  f'entries are registered under role=exploratory')
@@ -720,9 +748,8 @@ class TestDocsQuoteTheRegistrySize(unittest.TestCase):
             re.compile(r'\b(\d+)\s+variants over'),
             re.compile(r'\b(\d+)\s+(?:registered\s+)?(?:variants|entries) across'),
         ]
-        for name in self.DOCS:
+        for name, text in self._documents():
             with self.subTest(doc=name):
-                text = self._read(name)
                 for pat in pats:
                     for m in pat.finditer(text):
                         self.assertEqual(
