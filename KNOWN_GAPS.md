@@ -59,14 +59,25 @@ canary from alive to dead**, sending the live portfolio to cash a month early. N
 were affected on the working cache — every monthly distributor in the universe (AGG, BIL, BND,
 HYG, IEF, LQD, SHY, TIP, TLT), including the cash ticker the risk-free series is built from.
 
-Two consequences survive the fix. First, **any figure in this repository produced from a live
-cache rather than the frozen fixtures was computed on a possibly mixed-vintage series** — the
-golden master and every test are unaffected (they run on frozen CSVs), but the recorded
-robustness percentages and leaderboard metrics carry that uncertainty until re-measured.
-Second, the defect was invisible to 467 passing tests, because all of them read frozen
-fixtures: **no self-consistency test can see a data layer that is quietly disagreeing with its
-vendor.** `tests/test_guards.py::TestTheAdjustmentVintageStaysConsistent` now pins the
-invariant, and `PriceStore` re-downloads in full any ticker whose adjustment has been restated.
+**How far it reached, measured rather than asserted.** Only a window STRADDLING the seam is
+wrong; a window entirely on one side of it is internally consistent. The seam sits about 90
+days behind the run date, so a historical backtest is distorted only across its final ~12
+months and long-run metrics barely move — but a LIVE monthly decision always sits on the seam,
+which is why the live path is where this actually bit. Replaying every decision from 2005-01 to
+2026-08 with one distribution cycle of staleness on the lagged legs: **10 of 260 baskets change
+(3.8%)** — six canary flips and four single-asset substitutions. The error is one-directional:
+stale bars are too high, momentum reads too low, so every flip is toward MORE cash. The defect
+can make this repository hold cash it should not have held; it cannot make it hold risk it
+should not have held.
+
+**Why five rounds of QA missed it.** Every test in the suite reads frozen fixtures, and every
+audit so far reviewed the code and reproduced the repo's numbers *from the repo's own cache*.
+Nothing in the process ever compared the cached panel against the vendor it came from, so a
+data layer quietly disagreeing with Yahoo was outside what any of it could see. The 2026-08-01
+audit's third structural recommendation was precisely a vendor cross-check; it was deferred as
+"no urgency". **A self-consistency test cannot see a data layer that is wrong in a
+self-consistent way.** `tests/test_guards.py::TestTheAdjustmentVintageStaysConsistent` now pins
+the invariant, and `PriceStore` re-downloads in full any ticker whose adjustment was restated.
 
 
 **Yahoo serves the CURRENT vintage, not point-in-time.** `Adj Close` is back-adjusted for
