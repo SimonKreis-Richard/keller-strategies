@@ -12,7 +12,9 @@ emit a month until that month is over, and carries opens so a fill can be priced
 session *after* the decision. The monthly panel the strategies consume is derived from it
 (`monthly_adj_close`), so strategy code is unaffected by the change.
 
-Yahoo Finance is the single external source. `adj_close` is Yahoo's back-adjusted close;
+Yahoo Finance is the single external source THE ENGINE READS. Since 2026-09-01
+`tools/vendor_crosscheck.py` reads a second vendor for verification only; no engine
+path imports it, and it lives outside `tests/` so the suite stays network-free. `adj_close` is Yahoo's back-adjusted close;
 `close` is the raw close. Their ratio is the adjustment factor, which is what puts the
 *open* on the same adjusted scale as the closes:
 
