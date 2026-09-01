@@ -70,6 +70,30 @@ stale bars are too high, momentum reads too low, so every flip is toward MORE ca
 can make this repository hold cash it should not have held; it cannot make it hold risk it
 should not have held.
 
+**It is now checked on every run, offline.** `PriceStore._verify_adjustment_vintage` tests a
+property of the vendor's data model rather than of this code: `f = adj_close / close` is the
+cumulative dividend-adjustment factor, distributions only ever scale EARLIER bars down, and raw
+closes are untouched — so **f can only rise with time**, and two vintages spliced together put a
+downward step in it exactly at the seam. Measured across 37 tickers: **108 ms, no network**, worst
+genuine step −2.11e-06, and the defect that flipped the canary shows up at −0.0073 — a
+signal-to-noise ratio of about 3450. Because it needs no network it also works on the paths that
+hid the bug: offline, `download=False`, and inside the refresh throttle.
+
+Two exclusions were found by measurement, not by reasoning. A **constructed span** is donor data
+on the donor's own price scale, so its junction is a legitimate level change: on the working
+store those junctions step −0.126 (VWO), −0.232 (BIL) and −0.018 (BND), each landing exactly on
+that span's `real_from`. `VEA` passes only because EFA's factor happens to sit close, so all four
+declared spans are excluded rather than the three that fire. The newest `SETTLED_DAYS` bars are
+also skipped, where a dividend can be announced and not yet applied.
+
+The verdict is **reported** in the backtest header and **refused** on the live path — per
+strategy, scoped to the tickers that entered that decision, including its sleeves and canary
+rather than only what it holds. A store that verified nothing reports `not_applicable`, never
+`ok`, and the live path refuses that too: sizing orders from data nothing has checked is exactly
+the 2026-09-01 situation. The verdict and the detector's settings now travel in
+`provenance()`, so a report written before this guard and one written after are no longer
+indistinguishable.
+
 **Why five rounds of QA missed it.** Every test in the suite reads frozen fixtures, and every
 audit so far reviewed the code and reproduced the repo's numbers *from the repo's own cache*.
 Nothing in the process ever compared the cached panel against the vendor it came from, so a

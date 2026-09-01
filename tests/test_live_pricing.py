@@ -249,6 +249,98 @@ class TestSleeveLabellingForWraps(unittest.TestCase):
                                    f'{key}: sleeve split is 0/0 for held {image[0]}')
 
 
+class TestLiveRefusesUnverifiedPrices(unittest.TestCase):
+    """A price that disagrees with its own adjustment history must not become an order.
+
+    Found 2026-09-01: the cache held two dividend-adjustment vintages spliced at the
+    refresh-window edge, momentum across the seam read too LOW, and the live HAA canary
+    flipped from alive to dead — the book went to cash a month early on a number no market
+    produced.
+
+    The refusal is deliberately PER STRATEGY and scoped to the tickers that entered that
+    decision. A global stop would make one fund's restatement halt the whole registry; a
+    stop scoped to holdings alone would miss the two ways corruption actually changes an
+    order — an unheld candidate whose score decides the selection, and a canary that sends
+    the book to cash without ever appearing in the allocation row.
+    """
+
+    class _Store:
+        """Only what the live path reads. `constructed_before` is the other guard."""
+
+        def __init__(self, verification):
+            self.verification = verification
+
+        def constructed_before(self, ticker):
+            return None
+
+    @staticmethod
+    def _verification(status, tickers=()):
+        return {'status': status, 'n_tickers_checked': 3, 'tolerance': 1e-4,
+                'worst_step': -0.0073, 'worst_ticker': tickers[0] if tickers else None,
+                'checked_at': '2026-09-01T00:00:00', 'reason': None,
+                'violations': [{'ticker': x, 'date': '2026-06-03', 'step': -0.0073,
+                                'implied_distribution_pct': 0.73} for x in tickers]}
+
+    def _run(self, verification):
+        prices, _, s_w, accounts, config, strat = _fixtures()
+        strat.is_active = True
+        strat.score_type = 'unweighted'
+        config.update({'CURRENT_EXECUTION_DATE': '2026-07-01', 'STRATEGIES_TO_DISPLAY': [],
+                       'LEVERAGE_FACTOR': 1.0})
+        store = self._Store(verification) if verification is not None else None
+        with patch.object(main, 'get_live_prices',
+                          side_effect=lambda t: (pd.Series({'SPY': 250.0}),
+                                                 pd.Timestamp('2026-07-01'))):
+            _, results = main.compute_live_signals(prices, s_w, s_w, [strat], config,
+                                                   accounts, store=store)
+        return results[0]
+
+    def test_a_verified_store_sizes_normally(self):
+        res = self._run(self._verification('ok'))
+        self.assertIsNone(res['error'])
+
+    def test_a_seam_on_a_ticker_this_strategy_uses_refuses_the_order(self):
+        res = self._run(self._verification('disagrees', ('SPY',)))
+        self.assertIsNotNone(res['error'], 'a corrupted price became a live order')
+        self.assertIn('SPY', res['error'])
+        self.assertIn('vintage', res['error'])
+
+    def test_a_seam_elsewhere_leaves_this_strategy_alone(self):
+        """The bound on the blast radius, asserted rather than intended."""
+        res = self._run(self._verification('disagrees', ('TLT',)))
+        self.assertIsNone(res['error'],
+                          'a restatement on an unrelated ticker must not stop a strategy '
+                          f'that never reads it: {res["error"]}')
+
+    def test_a_store_that_verified_nothing_is_refused(self):
+        """`not_applicable` means the check could see nothing, which is exactly the state
+        the live path was in on 2026-09-01. Sizing orders from it is the failure, not the
+        fallback."""
+        for status in ('not_applicable', 'skipped'):
+            with self.subTest(status=status):
+                res = self._run(self._verification(status))
+                self.assertIsNotNone(res['error'])
+                self.assertIn('never verified', res['error'])
+
+    def test_a_store_without_the_attribute_at_all_is_refused(self):
+        class _Old:
+            def constructed_before(self, ticker):
+                return None
+
+        prices, _, s_w, accounts, config, strat = _fixtures()
+        strat.is_active = True
+        strat.score_type = 'unweighted'
+        config.update({'CURRENT_EXECUTION_DATE': '2026-07-01', 'STRATEGIES_TO_DISPLAY': [],
+                       'LEVERAGE_FACTOR': 1.0})
+        with patch.object(main, 'get_live_prices',
+                          side_effect=lambda t: (pd.Series({'SPY': 250.0}),
+                                                 pd.Timestamp('2026-07-01'))):
+            _, results = main.compute_live_signals(prices, s_w, s_w, [strat], config,
+                                                   accounts, store=_Old())
+        self.assertIsNotNone(results[0]['error'],
+                             'a store predating the guard must not be trusted by default')
+
+
 class TestLiveLeverageParity(unittest.TestCase):
     """EXEC-001, decided as option (b): live sizing stays at 1x and SAYS SO.
 

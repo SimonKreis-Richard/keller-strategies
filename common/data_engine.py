@@ -54,6 +54,13 @@ REFRESH_WINDOW_DAYS = 90
 #: months), so a restatement is caught before it can reach a signal.
 DETECT_WINDOW_DAYS = 400
 
+#: Largest DOWNWARD move allowed in a ticker's cumulative dividend-adjustment factor
+#: before it is called a spliced vintage. Measured 2026-09-01 across 37 tickers on the
+#: repaired cache: the worst genuine step was -2.11e-06 (CSV/float round-trip noise), and
+#: re-injecting the defect that flipped the HAA canary produced -0.0073. 1e-4 sits ~50x
+#: above the noise and ~70x below that seam, and still catches a 0.05% distribution.
+ADJUSTMENT_STEP_TOLERANCE = 1e-4
+
 #: Relative tolerance below which two adjusted closes for the same bar are "the same price".
 #: CSV round-trip noise is ~1e-12; the smallest dividend worth catching moves a price by
 #: several 1e-4. Anything in between is a real re-adjustment, so the threshold is loose
@@ -157,11 +164,21 @@ class PriceStore:
         #: since the cache was written. Recorded rather than silent: it means every earlier
         #: momentum score for those tickers was computed on a different vintage.
         self.readjusted = []
+        #: Momentum cost of a restatement, per ticker, filled by `_restatement_impact`.
+        self.restatement_impact = []
+        #: Whether `close` is a genuinely RAW series, DERIVED from the frames by
+        #: `_verify_adjustment_vintage`. False makes the vintage check inapplicable rather
+        #: than passing, which is the difference between 'I checked' and 'I saw nothing'.
+        self.has_raw_close = None
         self._frames = {}
 
         self._load(download=download)
         self._extend_history()
         self._apply_stale_policy()
+        #: Last, so it judges the panel consumers actually read — splices and stale-fills
+        #: included. Runs on EVERY construction, including `download=False` and a skipped
+        #: refresh, because those are precisely the paths on which nothing else looks.
+        self.verification = self._verify_adjustment_vintage()
 
     # ------------------------------------------------------------------ #
     # Construction
@@ -188,6 +205,8 @@ class PriceStore:
         # path bypasses __init__ and every consumer reads them.
         store.refresh_hours = 0.0
         store.refresh_skipped = None
+        store.readjusted = []
+        store.restatement_impact = []
         adj = adj_close.sort_index()
         raw_close = close.sort_index() if close is not None else adj.copy()
         if open_ is None:
@@ -197,7 +216,13 @@ class PriceStore:
             store.has_intraday = True
             raw_open = open_.sort_index()
         store._frames = {'adj_close': adj, 'close': raw_close, 'open': raw_open}
+        # A fixture built from adjusted closes has close == adj_close, so the adjustment
+        # factor is 1 everywhere and the vintage check can see NOTHING. Saying so is the
+        # point: an 'ok' that means 'I checked nothing' is the fail-open shape that let a
+        # cp1252 decode error report a modified worktree as clean.
+        store.has_raw_close = None
         store._apply_stale_policy()
+        store.verification = store._verify_adjustment_vintage()
         return store
 
     @classmethod
@@ -798,6 +823,127 @@ class PriceStore:
     # ------------------------------------------------------------------ #
     # Provenance
     # ------------------------------------------------------------------ #
+    def _verify_adjustment_vintage(self):
+        """Is this panel ONE dividend-adjustment vintage, or two spliced together?
+
+        `adj_close` is a total-return series and `close` is not, so their ratio
+
+            f(t) = adj_close(t) / close(t)
+
+        is the cumulative dividend-adjustment factor. Every distribution scales all EARLIER
+        bars down and leaves raw closes alone, so **f can only rise with time**. A cache
+        holding two vintages therefore shows a downward STEP in f exactly at the seam.
+
+        Why this rather than a comparison against a fresh download: the refresh already
+        overwrites its whole fetch window, so comparing the merged store against that fetch
+        compares fresh data with itself and sees nothing. This test is internal, costs no
+        network at all, and works on the paths where no refresh runs -- offline,
+        `download=False`, or the throttle -- which is exactly where the 2026-09-01 defect
+        survived. Measured across 37 tickers: 108 ms, worst genuine step -2.11e-06, and the
+        injected defect -0.0073, a signal-to-noise ratio of about 3450.
+
+        It is not self-referential either: it checks the cache against a property of the
+        VENDOR's data model that no code in this repository produced.
+
+        Two exclusions, both found by measurement rather than reasoning:
+
+        * a CONSTRUCTED span is donor data on the donor's own price scale, so its junction
+          is a legitimate level change, not a restated dividend. On the real store those
+          junctions step -0.126 (VWO), -0.232 (BIL) and -0.018 (BND), each landing exactly
+          on that span's `real_from`. `VEA` passes today only because EFA's factor happens
+          to sit close, so ALL FOUR declared spans are excluded rather than the three that
+          currently fire.
+        * the newest `SETTLED_DAYS` bars, where a dividend can be announced and not yet
+          applied.
+        """
+        result = {
+            'status': 'not_applicable',
+            'checked_at': pd.Timestamp.now().isoformat(timespec='seconds'),
+            'tolerance': ADJUSTMENT_STEP_TOLERANCE,
+            'n_tickers_checked': 0,
+            'worst_step': None,
+            'worst_ticker': None,
+            'violations': [],
+            'reason': None,
+        }
+        adj, raw = self._frames.get('adj_close'), self._frames.get('close')
+        if adj is None or raw is None or not len(adj):
+            result['reason'] = 'no adjusted/raw pair to compare'
+            return result
+        # Derived from the frames, never assumed. Whether a store has genuinely raw closes
+        # is a property of its data, and a cache could hold a degenerate pair as easily as
+        # an in-memory fixture does. Trusting a flag here would reproduce the fail-open this
+        # method exists to close: reporting 'ok' after checking nothing.
+        self.has_raw_close = not raw.equals(adj)
+        if not self.has_raw_close:
+            result['reason'] = ('close IS adj_close for this store, so the adjustment '
+                                'factor is 1 by construction and this check can see '
+                                'nothing')
+            return result
+
+        cutoff = adj.index[-1] - pd.Timedelta(days=SETTLED_DAYS)
+        worst, worst_ticker, violations, checked = 0.0, None, [], 0
+
+        for col in [c for c in adj.columns if c in raw.columns]:
+            f = (adj[col] / raw[col]).replace([np.inf, -np.inf], np.nan).dropna()
+            real_from = self.constructed_before(col)
+            if real_from is not None:
+                f = f[f.index >= real_from]
+            f = f[f.index <= cutoff]
+            if len(f) < 30:
+                continue
+            checked += 1
+            step = (f / f.shift(1) - 1.0).dropna()
+            if step.empty:
+                continue
+            low = float(step.min())
+            if low < worst:
+                worst, worst_ticker = low, col
+            for date, s in step[step < -ADJUSTMENT_STEP_TOLERANCE].items():
+                violations.append({
+                    'ticker': col,
+                    'date': str(date.date()),
+                    'step': float(s),
+                    # Reported so a -40% "step" reads as a split artefact rather than a
+                    # dividend seam. They are different investigations.
+                    'implied_distribution_pct': float(-s) * 100.0,
+                })
+
+        result['n_tickers_checked'] = checked
+        result['worst_step'] = worst
+        result['worst_ticker'] = worst_ticker
+        result['violations'] = violations[:50]
+        if checked == 0:
+            result['reason'] = 'no column had enough settled bars to check'
+        else:
+            result['status'] = 'disagrees' if violations else 'ok'
+        return result
+
+    def verification_lines(self):
+        """The verdict as report lines. Empty when there is nothing the reader must know."""
+        v = getattr(self, 'verification', None)
+        if not v or v['status'] == 'ok':
+            return []
+        if v['status'] == 'not_applicable':
+            return ['  data check: NOT APPLICABLE -- ' + str(v.get('reason'))]
+        worst = v['violations'][0]
+        others = len(v['violations']) - 1
+        plural = 'y' if len(v['violations']) == 1 else 'ies'
+        return [
+            '  ! DATA CHECK FAILED: {} adjustment discontinuit{} across {} tickers.'.format(
+                len(v['violations']), plural, v['n_tickers_checked']),
+            '    worst: {} at {} steps {:+.4%} (implies a {:.2f}% distribution){}'.format(
+                worst['ticker'], worst['date'], worst['step'],
+                worst['implied_distribution_pct'],
+                ', and {} more'.format(others) if others else ''),
+            '    The cached history holds more than one dividend-adjustment vintage. A '
+            'return crossing that date',
+            '    is measured across a discontinuity that never traded, and the error runs '
+            'one way: stale bars are',
+            '    too high, so momentum reads too low. Re-run with --refresh, or delete '
+            'data/cache to rebuild.',
+        ]
+
     def provenance(self):
         adj = self._frames['adj_close']
         payload = adj.to_csv().encode('utf-8')
@@ -818,6 +964,21 @@ class PriceStore:
             # A constructed price is not a price. Every spliced or synthetic span travels
             # with the artefact that used it, so no figure can be quoted without it.
             'constructed_history': getattr(self, 'constructed', {}),
+            # The integrity verdict, and the machinery that produced it. `sha256` above
+            # pins WHICH data was used; nothing pinned whether anything had checked it,
+            # nor which detector version judged it. A report written before the 2026-09-01
+            # vintage fix and one written after were indistinguishable in the manifest.
+            'verification': getattr(self, 'verification', None),
+            'readjusted': list(getattr(self, 'readjusted', [])),
+            'restatement_impact': list(getattr(self, 'restatement_impact', [])),
+            'refresh_skipped': getattr(self, 'refresh_skipped', None),
+            'adjustment_policy': {
+                'refresh_window_days': REFRESH_WINDOW_DAYS,
+                'detect_window_days': DETECT_WINDOW_DAYS,
+                'settled_days': SETTLED_DAYS,
+                'adjustment_tolerance': ADJUSTMENT_TOLERANCE,
+                'adjustment_step_tolerance': ADJUSTMENT_STEP_TOLERANCE,
+            },
         }
 
     def provenance_json(self):

@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 import numpy as np
 import pandas as pd
 
-from common.data_engine import PriceStore, IncompleteMonthError, DataGapError, MAX_STALE_DAYS
+from common.data_engine import (PriceStore, IncompleteMonthError, DataGapError, MAX_STALE_DAYS,
+                                ADJUSTMENT_STEP_TOLERANCE, DETECT_WINDOW_DAYS)
 from common.coverage import coverage_report, earliest_valid_start, signal_universe
 from common.ledger import ExecutionConfig, run_ledger, WeightInvariantError
 from common.manifest import build_manifest
@@ -890,6 +891,164 @@ class TestTheAdjustmentVintageStaysConsistent(unittest.TestCase):
             store._refresh_tail()
             self.assertEqual(store.readjusted, [])
             self.assertEqual(len(calls), 1)
+
+
+class TestTheCacheIsOneAdjustmentVintage(unittest.TestCase):
+    """The offline half of the 2026-09-01 defect: notice the seam without asking anyone.
+
+    `TestTheAdjustmentVintageStaysConsistent` above pins the REPAIR — that a restated
+    ticker gets re-downloaded whole. It only fires when a refresh runs. This class pins the
+    DETECTION, which must work when no refresh runs at all: offline, `download=False`, or
+    inside the refresh throttle. Those are the paths the defect actually survived on.
+
+    The invariant is a property of the vendor's data model, not of this code:
+    `f = adj_close / close` is the cumulative dividend-adjustment factor, dividends only
+    ever scale EARLIER bars down, and raw closes are untouched — so f can only rise. Two
+    vintages spliced together put a downward step in f exactly at the seam.
+    """
+
+    #: The stale-vintage inflation, as measured on the real cache on 2026-09-01.
+    BUMP = 1.007338
+
+    @classmethod
+    def _panel(cls, n=400, seam_at=None):
+        """(close, adj_close). `seam_at` inflates the older bars the way staleness does.
+
+        The adjustment factor is a STEP function, not a ramp: a real one moves only on
+        ex-dividend days and is flat between them. That also makes the expected seam step
+        exact arithmetic rather than something read off the series under test.
+        """
+        idx = pd.bdate_range('2024-01-02', periods=n)
+        close = pd.Series(100.0 + 0.01 * np.arange(n), index=idx)
+        factor = pd.Series(0.94, index=idx)
+        factor.iloc[n // 3:] = 0.97          # two notional distributions, both UPWARD
+        factor.iloc[2 * n // 3:] = 1.00
+        adj = close * factor
+        if seam_at is not None:
+            adj.loc[adj.index < idx[seam_at]] *= cls.BUMP
+        return close, adj
+
+    def _store(self, tmp, close, adj, ticker='ZZZ'):
+        for field, series in (('close', close), ('open', close), ('adj_close', adj)):
+            pd.DataFrame({ticker: series}).to_csv(
+                os.path.join(tmp, 'daily_{}.csv'.format(field)))
+        return PriceStore([ticker], start='2024-01-01', cache_dir=tmp,
+                          download=False, refresh_hours=0.0)
+
+    def test_a_spliced_vintage_is_caught_with_no_network_at_all(self):
+        """The case the whole guard exists for: nothing downloads, and it still knows."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            close, adj = self._panel(seam_at=300)
+            store = self._store(tmp, close, adj)
+            v = store.verification
+            self.assertEqual(v['status'], 'disagrees')
+            self.assertEqual(len(v['violations']), 1)
+            hit = v['violations'][0]
+            self.assertEqual(hit['ticker'], 'ZZZ')
+            self.assertEqual(hit['date'], str(close.index[300].date()),
+                             'the guard must name the seam, not merely report one exists')
+            self.assertAlmostEqual(hit['step'], 1.0 / self.BUMP - 1.0, places=9,
+                                   msg='the step is exactly the stale inflation undone')
+            text = '\n'.join(store.verification_lines())
+            self.assertIn('DATA CHECK FAILED', text)
+            self.assertIn('ZZZ', text)
+
+    def test_a_single_vintage_passes(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            close, adj = self._panel()
+            store = self._store(tmp, close, adj)
+            self.assertEqual(store.verification['status'], 'ok')
+            self.assertEqual(store.verification['violations'], [])
+            self.assertEqual(store.verification_lines(), [],
+                             'a clean panel must print nothing at all')
+
+    def test_a_degenerate_pair_reports_not_applicable_rather_than_ok(self):
+        """`close == adj_close` makes f identically 1, so the check can see NOTHING.
+
+        Reporting that as 'ok' would be an 'ok' meaning 'I checked nothing' — the fail-open
+        shape that let a cp1252 decode error report a modified worktree as clean. Every
+        frozen fixture in this suite is built this way, so this is the common case, not an
+        edge case.
+        """
+        idx = pd.bdate_range('2024-01-02', periods=200)
+        frame = pd.DataFrame({'ZZZ': 100.0 + 0.01 * np.arange(len(idx))}, index=idx)
+        store = PriceStore.from_adjusted(frame, frame.copy())
+        self.assertEqual(store.verification['status'], 'not_applicable')
+        self.assertIn('close IS adj_close', store.verification['reason'])
+        self.assertFalse(store.has_raw_close)
+
+    def test_a_constructed_span_junction_is_not_mistaken_for_a_seam(self):
+        """A splice joins two funds on two price scales, so f steps at the junction.
+
+        Measured on the real store, those junctions step -0.126 (VWO), -0.232 (BIL) and
+        -0.018 (BND) — an order of magnitude past the tolerance. The test asserts BOTH that
+        the guard stays quiet AND that the raw step is real, so the exclusion cannot be
+        deleted and pass by accident.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            idx = pd.bdate_range('2024-01-02', periods=400)
+            n = len(idx)
+            # `_splice_donors` takes k from adj_close and applies it to ALL THREE fields,
+            # so the spliced head carries the DONOR's adjustment factor unchanged. The
+            # junction therefore steps by (recipient factor / donor factor) - 1, and a
+            # DOWNWARD step needs an old donor with little accumulated adjustment meeting a
+            # younger recipient with more. That is the real shape: on the working store the
+            # junctions measured -0.126 (VWO), -0.232 (BIL) and -0.018 (BND).
+            donor_close = pd.Series(50.0 + 0.02 * np.arange(n), index=idx)
+            donor_adj = donor_close * 0.99
+            recip_close = pd.Series(np.nan, index=idx)
+            recip_adj = pd.Series(np.nan, index=idx)
+            recip_close.iloc[200:] = donor_close.iloc[200:].values * 2.5
+            recip_adj.iloc[200:] = recip_close.iloc[200:].values * 0.90
+            for field, dser, rser in (('close', donor_close, recip_close),
+                                      ('open', donor_close, recip_close),
+                                      ('adj_close', donor_adj, recip_adj)):
+                pd.DataFrame({'EEM': dser, 'VWO': rser}).to_csv(
+                    os.path.join(tmp, 'daily_{}.csv'.format(field)))
+            store = PriceStore(['VWO', 'EEM'], start='2024-01-01', cache_dir=tmp,
+                               download=False, refresh_hours=0.0)
+
+            self.assertIn('VWO', store.constructed, 'the fixture must actually splice')
+            self.assertEqual(store.verification['status'], 'ok',
+                             'a splice junction is a level change, not a restatement: '
+                             '{}'.format(store.verification['violations']))
+
+            # ... and the junction really would have fired without the exclusion.
+            adj, raw = store._frames['adj_close'], store._frames['close']
+            f = (adj['VWO'] / raw['VWO']).dropna()
+            worst = float((f / f.shift(1) - 1.0).dropna().min())
+            self.assertLess(worst, -0.05,
+                            'the fixture no longer reproduces a junction step, so this '
+                            'test would pass even with the exclusion removed')
+
+    def test_the_verdict_and_the_detector_settings_travel_in_provenance(self):
+        """A manifest pinned WHICH data was used and never whether anything checked it,
+        nor which detector version judged it. Reports from before and after the
+        2026-09-01 fix were indistinguishable."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            close, adj = self._panel(seam_at=300)
+            prov = self._store(tmp, close, adj).provenance()
+            self.assertEqual(prov['verification']['status'], 'disagrees')
+            self.assertEqual(prov['readjusted'], [])
+            self.assertIn('refresh_skipped', prov)
+            self.assertEqual(prov['adjustment_policy']['adjustment_step_tolerance'],
+                             ADJUSTMENT_STEP_TOLERANCE)
+            self.assertEqual(prov['adjustment_policy']['detect_window_days'],
+                             DETECT_WINDOW_DAYS)
+
+    def test_the_newest_bars_are_excluded_so_a_pending_dividend_is_not_an_alarm(self):
+        """Yahoo can publish an adjusted close for an announced-but-unapplied dividend on
+        the newest bar. That is settlement noise, not a spliced history."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            close, adj = self._panel()
+            adj.iloc[-1] *= 1.02                      # today's factor jumps
+            store = self._store(tmp, close, adj)
+            self.assertEqual(store.verification['status'], 'ok')
 
 
 class TestTheManifestRecordsWhatTheLedgerDoesNotDo(unittest.TestCase):

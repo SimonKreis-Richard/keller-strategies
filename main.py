@@ -987,6 +987,32 @@ def compute_live_signals(prices, scores_w, scores_u, strategies, config, broker_
                 if real_from is not None and signal_date < real_from:
                     problems.append(f'  {t} is CONSTRUCTED before {real_from.date()}; the '
                                     f'signal date {signal_date.date()} predates the fund')
+        # A price that disagrees with its own adjustment history must not be sized into an
+        # order. Found 2026-09-01: a spliced vintage understated momentum and flipped a live
+        # canary, so the book went to cash a month early. The blast radius is deliberately
+        # THIS strategy's decision, not the whole registry — and it covers the sleeves and
+        # the canary, not merely what is held: a corrupted score on an unheld candidate is
+        # what changes the selection, and a dead canary sends the book to cash without ever
+        # appearing in the allocation row.
+        if store is not None:
+            v = getattr(store, 'verification', None)
+            if v is None or v.get('status') in ('not_applicable', 'skipped'):
+                problems.append('  the price store was never verified against its own '
+                                'adjustment history; live orders must not be sized from '
+                                'data nothing has checked')
+            elif v.get('status') == 'disagrees':
+                sl = strat.sleeves()
+                universe = set(alloc.iloc[-1][alloc.iloc[-1] > 1e-9].index)
+                universe |= set(sl.get('offensive', ())) | set(sl.get('defensive', ()))
+                universe |= set(sl.get('canary', ()))
+                hit = sorted({x['ticker'] for x in v['violations']} & universe)
+                if hit:
+                    problems.append(
+                        f'  {", ".join(hit)} carr{"ies" if len(hit) == 1 else "y"} more '
+                        f'than one dividend-adjustment vintage, so momentum over windows '
+                        f'crossing the seam is wrong (and wrong LOW). Re-run with '
+                        f'--refresh, or delete data/cache to rebuild.')
+
         if problems:
             results.append({'name': strat.name, 'stale': stale_note,
                             'error': 'refusing to size this allocation:\n'
@@ -1675,6 +1701,10 @@ def print_report(metrics_data, display_metrics, config, store=None):
         # choice; hiding that you skipped it would be a correctness one.
         if getattr(store, 'refresh_skipped', None):
             report_lines.append(f"                   {store.refresh_skipped}")
+        # The adjustment-vintage verdict. A backtest is barely moved by a seam ~90 days
+        # behind the run date, so this reports rather than refuses — but it reports WHERE
+        # the numbers are read, not into a log nobody opens.
+        report_lines += getattr(store, 'verification_lines', lambda: [])()
         # With STRICT_GAPS=True (the default) a long interior gap refuses the run before
         # this line can print. This is the survivable path for a deliberate False override:
         # the run proceeds, and every gap it carried is named where the numbers are read.
