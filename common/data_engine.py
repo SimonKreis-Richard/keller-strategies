@@ -45,6 +45,27 @@ MAX_STALE_DAYS = 5
 #: self-healing.
 REFRESH_WINDOW_DAYS = 90
 
+#: Calendar days of history compared against Yahoo on every refresh, to notice that a
+#: distribution has restated the adjusted series. It must reach well OUTSIDE
+#: `REFRESH_WINDOW_DAYS`: the bars inside that window are rewritten on every refresh and are
+#: therefore always current, so comparing only those compares the cache against itself and
+#: sees nothing. The seam this detects sits at the window edge, and the stale side of it is
+#: everything older. 400 days also spans the longest momentum lookback (SMA13 needs 13
+#: months), so a restatement is caught before it can reach a signal.
+DETECT_WINDOW_DAYS = 400
+
+#: Relative tolerance below which two adjusted closes for the same bar are "the same price".
+#: CSV round-trip noise is ~1e-12; the smallest dividend worth catching moves a price by
+#: several 1e-4. Anything in between is a real re-adjustment, so the threshold is loose
+#: enough to ignore float noise and tight enough to miss no distribution.
+ADJUSTMENT_TOLERANCE = 1e-6
+
+#: Bars newer than this (calendar days before the newest overlapping bar) are excluded from
+#: the re-adjustment check. The last few rows legitimately change as a session settles, and
+#: that is not a re-adjustment; a dividend rescales EVERY row before its ex-date, so the
+#: signature is unmistakable in the older rows of the overlap.
+SETTLED_DAYS = 5
+
 #: Hours to wait before re-checking Yahoo for a cache that already holds the newest bar it
 #: can. Signals come from COMPLETE months and live order sizing uses a separate real-time
 #: quote call, so an intraday-stale daily cache cannot change a decision. See
@@ -132,6 +153,10 @@ class PriceStore:
         #: Set when a refresh was skipped because the cache was checked recently — the
         #: report prints it, so a stale cache is never silent.
         self.refresh_skipped = None
+        #: Tickers whose FULL history was re-downloaded because Yahoo had re-adjusted it
+        #: since the cache was written. Recorded rather than silent: it means every earlier
+        #: momentum score for those tickers was computed on a different vintage.
+        self.readjusted = []
         self._frames = {}
 
         self._load(download=download)
@@ -318,9 +343,14 @@ class PriceStore:
         `--refresh` on the CLI) to force it; the stamp is a plain file you can delete.
         """
         last = self._frames['adj_close'].index[-1]
-        today = pd.Timestamp.today().normalize()
-        if last >= today:
-            return
+        # NOTE: there is deliberately no `if last >= today: return` fast path any more.
+        # "Do we already hold today's bar?" and "has Yahoo restated the history we hold?"
+        # are different questions, and the first one used to silently answer the second.
+        # Once a distribution restated the adjusted series, the cache held today's bar, took
+        # this exit, and never noticed the seam for the rest of the day — which is exactly
+        # how a stale vintage reached a live signal on 2026-09-01. The interval below is the
+        # throttle, and it is the only one needed: it already bounds the network to one
+        # round-trip per `refresh_hours`.
         if self.refresh_hours > 0:
             prev = self._last_refresh_attempt()
             if prev is not None:
@@ -330,22 +360,91 @@ class PriceStore:
                         f'cache last checked {age_h:.1f}h ago (< {self.refresh_hours}h); '
                         f'newest bar {last.date()}. Use --refresh to force.')
                     return
-        since = max(self.start, last - pd.Timedelta(days=REFRESH_WINDOW_DAYS))
+        # Fetch the DETECTION window, not just the rewrite window: a restated adjustment is
+        # only visible on bars the refresh does not already overwrite (see DETECT_WINDOW_DAYS).
+        since = max(self.start, last - pd.Timedelta(days=DETECT_WINDOW_DAYS))
         try:
             fresh = self._download(self.tickers, since, quiet=True)
         except Exception as exc:
             print(f'Warning: incremental refresh failed ({exc}). Proceeding with the cache '
                   f'as of {last.date()} — treat any signal from it as stale.')
             return
+        stale = self._readjusted_tickers(fresh)
         for field in _FIELDS:
             old, new = self._frames[field], fresh[field]
             new = new.reindex(columns=old.columns.union(new.columns))
             old = old.reindex(columns=new.columns)
             combined = pd.concat([old.loc[old.index < new.index[0]], new])
             self._frames[field] = combined[~combined.index.duplicated(keep='last')].sort_index()
+        if stale:
+            self._redownload_full(stale)
         self.downloaded_at = pd.Timestamp.now().isoformat(timespec='seconds')
         self._stamp_refresh()
         self._write_cache()
+
+    def _readjusted_tickers(self, fresh):
+        """Tickers whose cached history is a DIFFERENT ADJUSTMENT VINTAGE from `fresh`.
+
+        Found 2026-09-01, by asking whether a live canary signal could be trusted. It could
+        not. `adj_close` is a total-return series, so when a fund goes ex-dividend Yahoo
+        rescales EVERY bar before that date. This refresh overwrites only the trailing
+        window, so after any distribution the cache holds two vintages spliced at the window
+        edge: recent bars carrying the new adjustment, older bars carrying the old one.
+
+        Nothing about that splice looks wrong. Every price is plausible, the series is
+        smooth, and the join is invisible — but a return whose two endpoints straddle the
+        seam is computed across a ~0.7% discontinuity that no market ever traded. Measured on
+        TIP: r6 and r12 understated by 0.73pp each, the 13612U canary score understated by
+        0.36pp, and the previous month's HAA signal flipped from alive to dead on it. The
+        bias has a direction — stale bars are always too HIGH, because they are missing
+        adjustments — so momentum reads systematically LOW and a canary dies too eagerly.
+
+        The check is per ticker, and deliberately not a blanket rebuild: with 37 tickers
+        something has almost always just gone ex, and re-downloading everything on every
+        distribution would turn a 2-second refresh into a minute of network for one fund's
+        dividend.
+        """
+        old, new = self._frames['adj_close'], fresh['adj_close']
+        cols = [c for c in new.columns if c in old.columns]
+        idx = new.index.intersection(old.index)
+        if not cols or len(idx) == 0:
+            return []
+        idx = idx[idx <= idx[-1] - pd.Timedelta(days=SETTLED_DAYS)]
+        if len(idx) == 0:
+            return []
+        a = old.loc[idx, cols].to_numpy(dtype=float)
+        b = new.loc[idx, cols].to_numpy(dtype=float)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            rel = np.abs(b - a) / np.abs(a)
+        rel = np.where(np.isfinite(rel), rel, 0.0)
+        return [c for j, c in enumerate(cols) if rel[:, j].max() > ADJUSTMENT_TOLERANCE]
+
+    def _redownload_full(self, tickers):
+        """Replace those tickers' whole history, so the series carries ONE vintage.
+
+        Patching only the seam would not do: the adjustment factor applies to every bar
+        before the ex-date, which is most of the history. The column has to come back whole.
+        """
+        print(f'Re-adjusted history detected for {len(tickers)} ticker(s) '
+              f'{sorted(tickers)[:6]}{"..." if len(tickers) > 6 else ""} — Yahoo has restated '
+              f'their dividend adjustment. Re-downloading those in full so the cached series '
+              f'is not two vintages spliced together.')
+        try:
+            full = self._download(tickers, self.start, quiet=True)
+        except Exception as exc:
+            print(f'Warning: full re-download failed ({exc}). The cached history for '
+                  f'{sorted(tickers)} is a MIXED adjustment vintage — momentum over windows '
+                  f'longer than {REFRESH_WINDOW_DAYS} days is unreliable until it succeeds.')
+            return
+        for field in _FIELDS:
+            cur, new = self._frames[field], full[field]
+            index = cur.index.union(new.index)
+            cur = cur.reindex(index)
+            for t in tickers:
+                if t in new.columns:
+                    cur[t] = new[t].reindex(index)
+            self._frames[field] = cur.sort_index()
+        self.readjusted = sorted(set(self.readjusted) | set(tickers))
 
     def _download(self, tickers, start, quiet=False):
         if not quiet:

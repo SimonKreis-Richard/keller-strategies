@@ -772,6 +772,126 @@ class TestTheCacheIsNotRecheckedOnEveryRun(unittest.TestCase):
             self.assertEqual(leftovers, [], f'temp files left behind: {leftovers}')
 
 
+class TestTheAdjustmentVintageStaysConsistent(unittest.TestCase):
+    """A cached total-return series must carry ONE dividend-adjustment vintage.
+
+    Found 2026-09-01. `adj_close` is a total-return series, so the day a fund goes
+    ex-dividend Yahoo rescales every bar before that date. The incremental refresh rewrites
+    only a trailing window, so after any distribution the cache held two vintages spliced at
+    the window edge — recent bars adjusted for the new dividend, older bars not.
+
+    Nothing about the splice looks wrong: every price is plausible and the series is smooth.
+    But a return whose endpoints straddle the seam is measured across a discontinuity no
+    market ever traded, and the error has a direction — older bars are too HIGH, so momentum
+    reads too LOW. Measured on TIP: r6 and r12 understated by 0.73pp each, the 13612U canary
+    score by 0.36pp, and the live HAA signal flipped from alive to dead on it.
+
+    The invariant asserted here is the one that matters and the one no self-consistency test
+    could see: a return computed FROM THE STORE must equal the same return computed on the
+    vendor's current series.
+    """
+
+    TICKER = 'ZZZ'
+
+    def _write_cache(self, tmp, series):
+        frame = pd.DataFrame({self.TICKER: series})
+        for field in ('adj_close', 'close', 'open'):
+            frame.to_csv(os.path.join(tmp, f'daily_{field}.csv'))
+
+    def _vintages(self):
+        """(cached, current) — the same bars before and after one distribution.
+
+        A dividend rescales every bar strictly before its ex-date and leaves later bars
+        alone, which is exactly the shape that produces a seam.
+        """
+        idx = pd.bdate_range('2024-01-01', periods=500)
+        cached = pd.Series(100.0 + 0.01 * np.arange(len(idx)), index=idx)
+        current = cached.copy()
+        ex_date = idx[-30]
+        current.loc[idx < ex_date] *= 0.99          # ~1% distribution, restated backwards
+        return idx, cached, current
+
+    def _store_with_stub(self, tmp, cached, current):
+        self._write_cache(tmp, cached)
+        store = PriceStore([self.TICKER], start='2024-01-01', cache_dir=tmp,
+                           download=False, refresh_hours=0.0)
+        calls = []
+
+        def fake_download(tickers, start, quiet=False):
+            calls.append(pd.Timestamp(start))
+            window = current.loc[current.index >= pd.Timestamp(start)]
+            frame = pd.DataFrame({t: window for t in tickers})
+            return {f: frame.copy() for f in ('open', 'close', 'adj_close')}
+
+        store._download = fake_download
+        return store, calls
+
+    def test_a_restated_adjustment_rebuilds_the_whole_column(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, current = self._vintages()
+            store, calls = self._store_with_stub(tmp, cached, current)
+            store._refresh_tail()
+
+            got = store._frames['adj_close'][self.TICKER].reindex(idx)
+            pd.testing.assert_series_equal(got, current.reindex(idx), check_names=False,
+                                           rtol=1e-12)
+            self.assertEqual(store.readjusted, [self.TICKER],
+                             'a restated history must be recorded, never silently repaired')
+            self.assertEqual(len(calls), 2,
+                             'one windowed refresh, then one full re-download of the ticker '
+                             'whose adjustment moved')
+
+    def test_the_seam_would_have_corrupted_a_twelve_month_return(self):
+        """The consequence, asserted directly: momentum across the seam must be right.
+
+        Without the repair the store keeps old bars at the cached vintage while the trailing
+        window carries the new one, and a 12-month return straddling the join is wrong by the
+        distribution -- about a full percentage point here, which is the order of magnitude
+        that decides a canary.
+        """
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, current = self._vintages()
+            store, _ = self._store_with_stub(tmp, cached, current)
+            store._refresh_tail()
+
+            last, back = idx[-1], idx[-253]
+            got = store._frames['adj_close'][self.TICKER]
+            r_store = float(got.loc[last]) / float(got.loc[back]) - 1.0
+            r_true = float(current.loc[last]) / float(current.loc[back]) - 1.0
+            r_spliced = float(current.loc[last]) / float(cached.loc[back]) - 1.0
+
+            self.assertAlmostEqual(r_store, r_true, places=12)
+            self.assertGreater(abs(r_true - r_spliced), 0.008,
+                               'the fixture must actually reproduce a seam worth catching')
+
+    def test_an_unchanged_history_is_not_re_downloaded(self):
+        """The check must not turn every refresh into a full rebuild: with a few dozen
+        tickers something has almost always just gone ex, and rebuilding everything for one
+        fund's dividend would trade a real speed-up for nothing."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, _ = self._vintages()
+            store, calls = self._store_with_stub(tmp, cached, cached)
+            store._refresh_tail()
+            self.assertEqual(store.readjusted, [])
+            self.assertEqual(len(calls), 1, 'only the windowed refresh should have run')
+
+    def test_a_settling_bar_is_not_mistaken_for_a_restatement(self):
+        """The newest bars change as a session closes. That is not a re-adjustment, and
+        treating it as one would rebuild the world every afternoon."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, _ = self._vintages()
+            current = cached.copy()
+            current.iloc[-1] *= 1.004               # today's close moved; history did not
+            store, calls = self._store_with_stub(tmp, cached, current)
+            store._refresh_tail()
+            self.assertEqual(store.readjusted, [])
+            self.assertEqual(len(calls), 1)
+
+
 class TestTheManifestRecordsWhatTheLedgerDoesNotDo(unittest.TestCase):
     """A saved artefact must carry the caveats that qualify its own numbers.
 

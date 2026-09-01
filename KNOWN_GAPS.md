@@ -43,6 +43,32 @@ permanent — it cannot be filled by simulation without inventing the thing bein
 
 ## 2. Data provenance
 
+**The cache used to hold two adjustment vintages at once, and it corrupted a live signal
+(fixed 2026-09-01).** `Adj Close` is a total-return series, so the day a fund goes ex-dividend
+Yahoo rescales every bar before that date. The incremental refresh rewrote only a trailing
+90-day window, so after any distribution the cached history was spliced: recent bars carrying
+the new adjustment, older bars the old one. Nothing about the join looked wrong — every price
+was plausible and the curve was smooth — but any return whose endpoints straddled it was
+measured across a discontinuity no market ever traded, and always in the same direction, since
+stale bars are missing adjustments and are therefore too HIGH. Momentum consequently read too
+LOW.
+
+Measured on TIP at the 2026-08-31 decision: `r6` and `r12` each understated by 0.73pp and the
+13612U canary score by 0.36pp. At the 2026-07-31 decision the same defect **flipped the HAA
+canary from alive to dead**, sending the live portfolio to cash a month early. Nine tickers
+were affected on the working cache — every monthly distributor in the universe (AGG, BIL, BND,
+HYG, IEF, LQD, SHY, TIP, TLT), including the cash ticker the risk-free series is built from.
+
+Two consequences survive the fix. First, **any figure in this repository produced from a live
+cache rather than the frozen fixtures was computed on a possibly mixed-vintage series** — the
+golden master and every test are unaffected (they run on frozen CSVs), but the recorded
+robustness percentages and leaderboard metrics carry that uncertainty until re-measured.
+Second, the defect was invisible to 467 passing tests, because all of them read frozen
+fixtures: **no self-consistency test can see a data layer that is quietly disagreeing with its
+vendor.** `tests/test_guards.py::TestTheAdjustmentVintageStaysConsistent` now pins the
+invariant, and `PriceStore` re-downloads in full any ticker whose adjustment has been restated.
+
+
 **Yahoo serves the CURRENT vintage, not point-in-time.** `Adj Close` is back-adjusted for
 every dividend and split announced since. A backtest therefore sees adjustment factors that
 did not exist at the decision date. Two things were measured on this and **found immaterial**,
