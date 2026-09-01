@@ -395,6 +395,9 @@ class PriceStore:
                   f'as of {last.date()} — treat any signal from it as stale.')
             return
         stale = self._readjusted_tickers(fresh)
+        # Measure the cost BEFORE the merge: this is the only moment at which the cached
+        # vintage and the vendor's current one both exist.
+        self.restatement_impact = self._restatement_impact(fresh, stale)
         for field in _FIELDS:
             old, new = self._frames[field], fresh[field]
             new = new.reindex(columns=old.columns.union(new.columns))
@@ -443,6 +446,58 @@ class PriceStore:
             rel = np.abs(b - a) / np.abs(a)
         rel = np.where(np.isfinite(rel), rel, 0.0)
         return [c for j, c in enumerate(cols) if rel[:, j].max() > ADJUSTMENT_TOLERANCE]
+
+    def _restatement_impact(self, fresh, stale):
+        """What a restatement COSTS, in the units that decide: momentum lookbacks.
+
+        `_readjusted_tickers` answers "did any bar move". That is a detection, and on its
+        own it says nothing about whether anything downstream would have noticed. This
+        answers "does it move a momentum score", which is the question the strategies ask.
+
+        It exists because the figure that made the 2026-09-01 incident legible -- TIP's r6
+        and r12 understated by 0.73pp each, the 13612U canary score by 0.36pp -- was
+        computed by hand and then written into prose, where nothing could keep it true.
+        Note the shape: r1 alone would have missed the defect entirely, because its base is
+        inside the refresh window and therefore always current. Only the long legs cross the
+        seam, which is exactly why a stale cache reads as weak momentum rather than as
+        obviously broken data.
+
+        Costs no network: `fresh` is already in hand.
+        """
+        out = []
+        old_frame, new_frame = self._frames['adj_close'], fresh['adj_close']
+
+        def month_ends(series):
+            s = series.dropna()
+            if s.empty:
+                return s
+            m = s.groupby([s.index.year, s.index.month]).tail(1)
+            return m[~m.index.duplicated()]
+
+        for ticker in stale:
+            if ticker not in old_frame.columns or ticker not in new_frame.columns:
+                continue
+            old_me, new_me = month_ends(old_frame[ticker]), month_ends(new_frame[ticker])
+            shared = old_me.index.intersection(new_me.index)
+            if len(shared) < 13:
+                # `fresh` spans DETECT_WINDOW_DAYS, so a 12-month lookback is normally just
+                # inside it. When it is not, say nothing rather than report a partial cost.
+                continue
+            old_me, new_me = old_me.reindex(shared), new_me.reindex(shared)
+            record = {'ticker': ticker}
+            legs = {'r1': 2, 'r3': 4, 'r6': 7, 'r12': 13}
+            deltas = []
+            for name, back in legs.items():
+                p_old, p_new = float(old_me.iloc[-1]), float(new_me.iloc[-1])
+                r_old = p_old / float(old_me.iloc[-back]) - 1.0
+                r_new = p_new / float(new_me.iloc[-back]) - 1.0
+                record[name + '_pp'] = (r_new - r_old) * 100.0
+                deltas.append(r_new - r_old)
+            # The unweighted 13612U the HAA canary reads, so the number is directly
+            # comparable to the threshold it is tested against.
+            record['s13612u_pp'] = (sum(deltas) / 4.0) * 100.0
+            out.append(record)
+        return out
 
     def _redownload_full(self, tickers):
         """Replace those tickers' whole history, so the series carries ONE vintage.

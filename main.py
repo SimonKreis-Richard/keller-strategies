@@ -839,16 +839,30 @@ def size_positions(alloc, prices, signal_date, accounts, config, strat, s_w, liv
 
     return result
 
+#: Hardest a live run will throttle its data re-check, whatever the config says. The
+#: throttle gates the adjustment-restatement detector too, so a long one is indistinguishable
+#: from "never verify" on the one path that spends real money.
+LIVE_MAX_REFRESH_HOURS = 24.0
+
+
 def load_store(config):
     """Open the daily price store (downloading / refreshing as needed)."""
     cache_dir = config.get('CACHE_DIR') or os.path.join(ROOT_DIR, 'data', 'cache')
     # The absent-key default is True, matching the dashboard: a config dict that never
     # thought about gaps gets the guard, not the exemption. "Unknown must mean check" is
     # the same failure direction the refresh stamp already follows.
+    refresh_hours = config.get('CACHE_REFRESH_HOURS', REFRESH_MIN_HOURS)
+    # A long throttle is a legitimate choice for a backtest -- reproducibility beats
+    # freshness there. It is not one for a live run: the throttle is also what stops the
+    # restatement detector from ever running, so a generous CACHE_REFRESH_HOURS silently
+    # buys "size real orders from a cache nobody re-checked". Capped, not overridden, so a
+    # tighter setting is still honoured.
+    if config.get('EXECUTION_MODE'):
+        refresh_hours = min(float(refresh_hours), LIVE_MAX_REFRESH_HOURS)
     return PriceStore(TICKERS, start=config['DATA_START_DATE'], cache_dir=cache_dir,
                       download=config.get('ALLOW_DOWNLOAD', True),
                       strict_gaps=config.get('STRICT_GAPS', True),
-                      refresh_hours=config.get('CACHE_REFRESH_HOURS', REFRESH_MIN_HOURS))
+                      refresh_hours=refresh_hours)
 
 
 def build_signal_panel(store, config):

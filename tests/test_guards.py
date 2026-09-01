@@ -893,6 +893,107 @@ class TestTheAdjustmentVintageStaysConsistent(unittest.TestCase):
             self.assertEqual(len(calls), 1)
 
 
+class TestARestatementIsPricedInTheUnitsThatDecide(unittest.TestCase):
+    """Detecting that bars moved is not the same as knowing whether anything cared.
+
+    The figure that made the 2026-09-01 incident legible was a momentum delta, and it was
+    computed by hand into prose where nothing could keep it true. `_restatement_impact`
+    computes it, so the manifest carries the COST of a restatement and not merely its fact.
+
+    The expected values here are derived in the test from the two series the stub serves,
+    never read back from the engine.
+    """
+
+    def _harness(self):
+        return TestTheAdjustmentVintageStaysConsistent()
+
+    def test_the_long_legs_move_and_r1_does_not(self):
+        import tempfile
+        h = self._harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, current = h._vintages()
+            store, _ = h._store_with_stub(tmp, cached, current)
+            store._refresh_tail()
+
+            self.assertTrue(store.restatement_impact,
+                            'a restatement was repaired but never priced')
+            rec = store.restatement_impact[0]
+            self.assertEqual(rec['ticker'], 'ZZZ')
+
+            # Independent expectation, from the served series only.
+            def month_ends(s):
+                m = s.groupby([s.index.year, s.index.month]).tail(1)
+                return m[~m.index.duplicated()]
+
+            old_me, new_me = month_ends(cached), month_ends(current)
+            shared = old_me.index.intersection(new_me.index)
+            old_me, new_me = old_me.reindex(shared), new_me.reindex(shared)
+            for leg, back in (('r1', 2), ('r3', 4), ('r6', 7), ('r12', 13)):
+                want = ((float(new_me.iloc[-1]) / float(new_me.iloc[-back]))
+                        - (float(old_me.iloc[-1]) / float(old_me.iloc[-back]))) * 100.0
+                self.assertAlmostEqual(rec[leg + '_pp'], want, places=8, msg=leg)
+
+            # The shape that made the defect invisible: the short leg's base sits inside
+            # the refresh window and is therefore always current, so only the long legs
+            # cross the seam. A stale cache reads as weak momentum, not as broken data.
+            self.assertAlmostEqual(rec['r1_pp'], 0.0, places=8)
+            self.assertGreater(rec['r12_pp'], 0.5,
+                               'the twelve-month leg must carry the restatement')
+
+    def test_nothing_is_priced_when_nothing_was_restated(self):
+        import tempfile
+        h = self._harness()
+        with tempfile.TemporaryDirectory() as tmp:
+            idx, cached, _ = h._vintages()
+            store, _ = h._store_with_stub(tmp, cached, cached)
+            store._refresh_tail()
+            self.assertEqual(store.restatement_impact, [])
+
+
+class TestALiveRunCannotThrottleAwayItsOwnVerification(unittest.TestCase):
+    """The throttle gates the restatement detector as well as the download.
+
+    So a generous `CACHE_REFRESH_HOURS` does not merely buy speed on the live path — it
+    buys "never re-check", which is indistinguishable from the state that sized orders from
+    a spliced cache on 2026-09-01. Capped rather than overridden, so a tighter setting is
+    still honoured.
+    """
+
+    def _refresh_hours_used(self, config):
+        import main
+        from unittest.mock import patch
+        seen = {}
+
+        def fake_store(*args, **kwargs):
+            seen.update(kwargs)
+            return object()
+
+        with patch.object(main, 'PriceStore', side_effect=fake_store):
+            main.load_store(config)
+        return seen['refresh_hours']
+
+    def test_a_live_run_caps_a_generous_throttle(self):
+        import main
+        used = self._refresh_hours_used({'DATA_START_DATE': '2015-01-01',
+                                         'EXECUTION_MODE': True,
+                                         'CACHE_REFRESH_HOURS': 720.0})
+        self.assertEqual(used, main.LIVE_MAX_REFRESH_HOURS)
+
+    def test_a_live_run_still_honours_a_tighter_setting(self):
+        used = self._refresh_hours_used({'DATA_START_DATE': '2015-01-01',
+                                         'EXECUTION_MODE': True,
+                                         'CACHE_REFRESH_HOURS': 0.0})
+        self.assertEqual(used, 0.0)
+
+    def test_a_backtest_may_throttle_as_long_as_it_likes(self):
+        """Reproducibility beats freshness off the live path, and a stale backtest cannot
+        place an order."""
+        used = self._refresh_hours_used({'DATA_START_DATE': '2015-01-01',
+                                         'EXECUTION_MODE': False,
+                                         'CACHE_REFRESH_HOURS': 720.0})
+        self.assertEqual(used, 720.0)
+
+
 class TestTheCacheIsOneAdjustmentVintage(unittest.TestCase):
     """The offline half of the 2026-09-01 defect: notice the seam without asking anyone.
 
