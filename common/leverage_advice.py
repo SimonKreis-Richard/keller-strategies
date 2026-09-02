@@ -71,6 +71,8 @@ does the same. There is no fallback heuristic anywhere in the chain, because a m
 a record that never saw 2008 is exactly the failure mode `margin_sizing` was written against.
 """
 
+import os
+
 from dataclasses import dataclass, replace
 
 from common import margin_sizing as ms
@@ -150,6 +152,42 @@ class Advice:
                 else '(nothing to size)')
 
 
+#: Where the full-registry selection statistics live. Written by `tools/emit_facts.py`.
+REGISTRY_FACTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              'tests', 'fixtures', 'run_facts.json')
+
+
+def registry_trial_population(path=None):
+    """(n_trials, sd) from the FULL-REGISTRY run, or (None, None) when unavailable.
+
+    AUD-06. The multiple-testing haircut must describe the search that produced the pick,
+    and that search was always the whole registry -- never whatever subset happened to be
+    ticked. Deriving it from the run instead made the recommendation depend on the filter:
+    measured 2026-08-01, `HAA_G12` came out at 1.35x in a three-entry run against 1.27x on
+    the full thirty-six, the smaller run receiving the MILDER haircut, in the flattering
+    direction.
+
+    Reading a file makes this fallible, so the failure is explicit: when the artefact is
+    missing or malformed the caller falls back to the run's own population and
+    `assumption_lines` says so. A silent fallback would restore the defect and hide it.
+    """
+    # Resolved HERE, not in the signature. A default argument binds the module constant's
+    # VALUE at import, so `patch.object(la, 'REGISTRY_FACTS', ...)` would leave this reading
+    # the real file. That is the third time this exact binding rule has bitten in one day:
+    # once in `vendor_crosscheck.crosscheck`, once in its `main`, and here.
+    path = path or REGISTRY_FACTS
+    try:
+        import json
+        with open(path, encoding='utf-8') as fh:
+            selection = (json.load(fh) or {}).get('selection') or {}
+        n_trials, spread = selection.get('n_trials'), selection.get('trial_sharpe_sd')
+        if n_trials and spread:
+            return int(n_trials), float(spread)
+    except Exception:                                    # noqa: BLE001
+        pass
+    return None, None
+
+
 def build_policy(metrics_data, k=3.0, borrow_rate_annual=0.06,
                  capacity_leverage=None, seed=SEED):
     """The shared parameter block, with the two MEASURED inputs read off the run itself.
@@ -164,6 +202,10 @@ def build_policy(metrics_data, k=3.0, borrow_rate_annual=0.06,
     the holdings, not a preference, and `compare_table` allows exactly that one field to differ.
     """
     n_trials, sd = trial_sharpe_spread(metrics_data)
+    # Prefer the registry's population over this run's (AUD-06); fall back loudly.
+    registry_n, registry_sd = registry_trial_population()
+    if registry_n:
+        n_trials, sd = registry_n, registry_sd
     ranked = [d for d in metrics_data if d.get('in_ranked_window')]
     rf_row = ranked[0] if ranked else (metrics_data[0] if metrics_data else None)
     rf = float(rf_row['rf_annual']) if rf_row and rf_row.get('rf_annual') is not None else None
@@ -292,11 +334,21 @@ def assumption_lines(advice):
         f'by the MEASURED daily-path uplift of the same held allocation.',
     ]
     if p.n_trials:
-        lines.append(f'Sharpe haircut derived from this suite: {p.n_trials} selection trials '
-                     f'with a cross-sectional spread of {p.trial_sharpe_sd:.3f}. That is '
-                     f'THIS RUN\'s population: selecting a subset of the registry shrinks '
-                     f'the trial count and MILDENS the haircut, but the search that produced '
-                     f'the pick was the full registry — a partial run flatters (AUD-06).')
+        registry_n, _registry_sd = registry_trial_population()
+        if registry_n and registry_n == p.n_trials:
+            lines.append(f'Sharpe haircut derived from the REGISTRY, not from this run: '
+                         f'{p.n_trials} selection trials with a cross-sectional spread of '
+                         f'{p.trial_sharpe_sd:.3f}. The search that produced the pick was '
+                         f'always the whole registry, so ticking fewer entries no longer '
+                         f'buys a milder haircut (AUD-06).')
+        else:
+            lines.append(f'Sharpe haircut derived from THIS RUN: {p.n_trials} selection '
+                         f'trials with a cross-sectional spread of {p.trial_sharpe_sd:.3f}. '
+                         f'The registry-wide figures were unavailable '
+                         f'(tests/fixtures/run_facts.json missing or unreadable — '
+                         f'regenerate with tools/emit_facts.py), so a partial run FLATTERS: '
+                         f'fewer trials means a milder haircut than the search justifies '
+                         f'(AUD-06).')
     else:
         lines.append('No multiple-testing haircut: too few trials to measure a spread. The '
                      'Sharpe used is therefore the selected one, and selection flatters it.')

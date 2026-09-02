@@ -9,6 +9,7 @@ helped". Those two print the same 1.00x.
 """
 
 import re
+import os
 import unittest
 
 import numpy as np
@@ -81,6 +82,67 @@ class TestTheMaintenanceTable(unittest.TestCase):
         self.assertAlmostEqual(ms.resolve_maintenance_margin(policy, kpis), 0.90)
 
 
+class TestTheHaircutDescribesTheSearchNotTheFilter(unittest.TestCase):
+    """AUD-06: the Max margin column must not depend on which boxes were ticked.
+
+    The multiple-testing haircut exists to price the search that produced the pick, and that
+    search was always the whole registry. Deriving it from the RUN made a three-entry run
+    receive a milder haircut than a thirty-six-entry one -- measured 2026-08-01, `HAA_G12` at
+    1.35x against 1.27x -- with the smaller, less justified population flattering the answer.
+
+    The population now comes from `tests/fixtures/run_facts.json`, which is written by
+    `tools/emit_facts.py` from a full-registry run.
+    """
+
+    def test_the_population_is_the_registrys_not_the_runs(self):
+        registry_n, registry_sd = la.registry_trial_population()
+        self.assertIsNotNone(registry_n, 'run_facts.json carries no selection block; '
+                                         'regenerate it with tools/emit_facts.py')
+        run_n, _run_sd = trial_sharpe_spread(_suite())
+        self.assertNotEqual(run_n, registry_n,
+                            'the fixture suite happens to match the registry size, so this '
+                            'test cannot tell the two sources apart — change the fixture')
+        policy = la.build_policy(_suite())
+        self.assertEqual(policy.n_trials, registry_n)
+        self.assertAlmostEqual(policy.trial_sharpe_sd, registry_sd)
+
+    def test_a_subset_and_a_larger_run_get_the_same_haircut(self):
+        """The property the defect broke, asserted directly."""
+        big = _suite()
+        small = big[:3]
+        self.assertEqual(la.build_policy(small).n_trials, la.build_policy(big).n_trials)
+        self.assertEqual(la.build_policy(small).trial_sharpe_sd,
+                         la.build_policy(big).trial_sharpe_sd)
+
+    def test_the_assumption_line_names_the_registry_as_the_source(self):
+        advice = la.advise(_suite())
+        text = '\n'.join(la.assumption_lines(advice))
+        self.assertIn('derived from the REGISTRY', text)
+        self.assertIn('AUD-06', text)
+
+    def test_a_missing_facts_file_falls_back_LOUDLY(self):
+        """A silent fallback would restore the defect and hide it, which is worse than the
+        defect: the number would be flattering AND unremarked."""
+        from unittest.mock import patch
+        with patch.object(la, 'REGISTRY_FACTS', os.path.join(os.sep, 'nope', 'missing.json')):
+            self.assertEqual(la.registry_trial_population(), (None, None))
+            advice = la.advise(_suite())
+            text = '\n'.join(la.assumption_lines(advice))
+        self.assertIn('derived from THIS RUN', text)
+        self.assertIn('flatters', text.lower())
+        self.assertIn('tools/emit_facts.py', text)
+
+    def test_a_malformed_facts_file_is_treated_as_absent(self):
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = os.path.join(tmp, 'run_facts.json')
+            with open(broken, 'w', encoding='utf-8') as fh:
+                fh.write('{ this is not json')
+            with patch.object(la, 'REGISTRY_FACTS', broken):
+                self.assertEqual(la.registry_trial_population(), (None, None))
+
+
 class TestWhatItTakesFromTheRun(unittest.TestCase):
 
     def test_the_trial_count_excludes_controls_and_exploratory_entries(self):
@@ -109,18 +171,44 @@ class TestWhatItTakesFromTheRun(unittest.TestCase):
         short = {f'S{i}': pd.Series([0.01, 0.02, -0.01], index=idx) for i in range(5)}
         self.assertIsNone(participation_ratio(short))
 
-    def test_too_few_trials_means_no_haircut_and_the_assumptions_say_so(self):
-        advice = la.advise([_entry('only')])
+    def test_too_few_trials_anywhere_means_no_haircut_and_the_assumptions_say_so(self):
+        """With no registry artefact AND a single-entry run there is no population to
+        derive a haircut from, so none is applied and the omission is stated.
+
+        Before AUD-06 this was the behaviour for ANY small run, which was the defect: the
+        registry's search does not stop counting because somebody ticked one box. A
+        single-entry run now inherits the registry's twenty trials; it is only when the
+        artefact is missing too that the haircut genuinely has no basis.
+        """
+        from unittest.mock import patch
+        with patch.object(la, 'REGISTRY_FACTS', os.path.join(os.sep, 'nope', 'absent.json')):
+            advice = la.advise([_entry('only')])
+            lines = la.assumption_lines(advice)
         self.assertIsNone(advice.policy.n_trials)
-        self.assertTrue(any('No multiple-testing haircut' in a
-                            for a in la.assumption_lines(advice)))
+        self.assertTrue(any('No multiple-testing haircut' in a for a in lines))
+
+    def test_a_single_entry_run_still_inherits_the_registrys_search(self):
+        """The AUD-06 property from the smallest possible run."""
+        registry_n, _sd = la.registry_trial_population()
+        advice = la.advise([_entry('only')])
+        self.assertEqual(advice.policy.n_trials, registry_n)
 
     def test_the_spread_is_measured_not_chosen(self):
+        """The haircut coefficient is derived from a cross-sectional spread, never picked.
+
+        Since AUD-06 the spread `build_policy` uses is the REGISTRY's rather than this
+        run's, so the property is asserted in two halves: `trial_sharpe_spread` still
+        measures whatever population it is handed, and `build_policy` falls back to exactly
+        that measurement when the registry artefact is unavailable. What must never happen
+        is a constant appearing from nowhere.
+        """
+        from unittest.mock import patch
         rows = _suite()
         n, sd = trial_sharpe_spread(rows)
         self.assertEqual(n, 4)
         self.assertAlmostEqual(sd, float(np.std([0.9, 0.6, 1.2, 0.8], ddof=1)))
-        self.assertEqual(la.build_policy(rows).trial_sharpe_sd, sd)
+        with patch.object(la, 'REGISTRY_FACTS', os.path.join(os.sep, 'nope', 'absent.json')):
+            self.assertEqual(la.build_policy(rows).trial_sharpe_sd, sd)
 
     def test_the_risk_free_rate_is_the_one_the_sharpes_were_netted_against(self):
         rows = [_entry('late', in_ranked_window=False, rf_annual=0.09),

@@ -379,14 +379,16 @@ histories (first in 70.7%<!-- facts:robustness.family_rank.HAA.p_first:pct1 -->)
 momentum 12.7%, per-asset trend 0.2%. "Hold a canary-protected family, and prefer HAA"
 survives resampling; no finer claim does.
 
-**The "Max margin" column depends on which entries you ran.** The multiple-testing haircut
-derives its trial count and Sharpe spread from *the run's* population, so a 3-entry run
-recommends `HAA_G12` at 1.35x where the 36-entry run says 1.27x (measured 2026-08-01,
-AUD-06) — the smaller run gets the milder haircut, in the flattering direction, even though
-the search that produced the pick was always the full registry. Methodologically the haircut
-*should* reflect the search that produced the pick; practically, read the recommendation off
-the full-registry run. The assumption lines under the sizing table now say this whenever the
-haircut prints.
+**The "Max margin" column used to depend on which entries you ran — fixed 2026-09-01.**
+The multiple-testing haircut derived its trial count and Sharpe spread from *the run's*
+population, so a 3-entry run recommended `HAA_G12` at 1.35x where the 36-entry run said
+1.27x (measured 2026-08-01, AUD-06): the smaller run received the milder haircut, in the
+flattering direction, even though the search that produced the pick was always the full
+registry. The population now comes from `tests/fixtures/run_facts.json`, written by
+`tools/emit_facts.py` from a full-registry run, so ticking fewer entries no longer buys a
+gentler answer. When that artefact is missing the code falls back to the run's own
+population and the assumption lines SAY SO — a silent fallback would restore the defect and
+hide it, which is worse than the defect.
 
 **The leverage frontier is month-end and constant-f, and says so.** The same resampled
 histories walked at every leverage level under the ledger's monthly-reset policy, with each
