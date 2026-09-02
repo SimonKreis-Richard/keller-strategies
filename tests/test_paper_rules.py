@@ -21,6 +21,7 @@ arithmetic written out in the test. Nothing here calls production code to decide
 production code should have produced.
 """
 import os
+import re
 import sys
 import unittest
 
@@ -688,7 +689,8 @@ class TestDocsQuoteTheRegistrySize(unittest.TestCase):
 
     #: Documents that SHIP. They are in the public repository, so a fresh clone must contain
     #: every one of them and a missing entry is a failure, not a skip.
-    DOCS = ('README.md', 'ARCHITECTURE.md', 'KNOWN_GAPS.md')
+    DOCS = ('README.md', 'ARCHITECTURE.md', 'KNOWN_GAPS.md', 'LEVERAGE.md',
+            'CONTRIBUTING.md')
 
     #: Agent-facing documents. They are gitignored and exist only on a working machine, but
     #: they quote the same registry counts and go stale in exactly the same way, so they are
@@ -728,6 +730,93 @@ class TestDocsQuoteTheRegistrySize(unittest.TestCase):
                 self.assertNotIn('registry is all-2x', text,
                                  f'{name} still claims the registry is all-2x; twelve 3x '
                                  f'entries are registered under role=exploratory')
+
+    FACTS = os.path.join(os.path.dirname(__file__), 'fixtures', 'run_facts.json')
+
+    #: `<number> <!-- facts:<dotted.path>:<format> -->` in any pinned document. The comment
+    #: does not render, so the prose reads normally and the number is machine-checkable.
+    #: This is the mechanism that generalises: a NEW PHRASING is covered for free, and a new
+    #: number is covered the moment somebody annotates it. The regex list below only ever
+    #: caught the sentences that had already gone stale.
+    ANNOTATED = re.compile(
+        r'([-+]?\d[\d,]*\.?\d*)\s*%?\s*(?:\*\*)?\s*<!--\s*facts:([\w.]+):(\w+)\s*-->')
+
+    @staticmethod
+    def _resolve(facts, path):
+        """Walk a dotted path through the facts. An integer segment indexes a list, so
+        `robustness.top.0.p_top_k` reaches the leaderboard's first row."""
+        node = facts
+        for part in path.split('.'):
+            if isinstance(node, dict):
+                if part not in node:
+                    return None
+                node = node[part]
+            elif isinstance(node, list):
+                if not part.lstrip('-').isdigit():
+                    return None
+                index = int(part)
+                if not -len(node) <= index < len(node):
+                    return None
+                node = node[index]
+            else:
+                return None
+        return node
+
+    @staticmethod
+    def _format(value, kind):
+        if value is None:
+            return None
+        if kind == 'int':
+            return str(int(value))
+        if kind.startswith('pct'):
+            return '{:.{d}f}'.format(float(value) * 100.0, d=int(kind[3:] or 1))
+        if kind.startswith('num'):
+            return '{:.{d}f}'.format(float(value), d=int(kind[3:] or 2))
+        raise AssertionError('unknown format code ' + kind)
+
+    def test_every_annotated_number_matches_the_generated_facts(self):
+        """Prose that quotes a computed number must quote the artefact that computed it.
+
+        The registry count drifted out of the docs five times, and the published PBO figures
+        were hand-copied into two files and then silently invalidated by a data fix. Both are
+        the same disease -- prose caching computation -- and a hand-kept regex is not a cache
+        invalidation, because it pins the phrasings that went stale LAST time.
+        """
+        import json
+        if not os.path.exists(self.FACTS):
+            self.fail('tests/fixtures/run_facts.json is missing; regenerate it with '
+                      'tools/emit_facts.py — the documentation tests read it')
+        with open(self.FACTS, encoding='utf-8') as fh:
+            facts = json.load(fh)
+
+        seen = 0
+        for name, text in self._documents():
+            for match in self.ANNOTATED.finditer(text):
+                quoted, path, kind = match.group(1), match.group(2), match.group(3)
+                value = self._resolve(facts, path)
+                self.assertIsNotNone(
+                    value, f'{name} cites facts:{path}, which run_facts.json does not carry')
+                want = self._format(value, kind)
+                self.assertEqual(
+                    quoted.replace(',', ''), want,
+                    f'{name} quotes {quoted} for facts:{path}; the run computed {want}. '
+                    f'Regenerate with tools/emit_facts.py and update the prose in the same '
+                    f'commit, or fix the prose.')
+                seen += 1
+        self.assertGreater(seen, 0,
+                           'no annotated figures found at all — the mechanism is only worth '
+                           'having if the documents actually use it')
+
+    def test_the_registry_count_comes_from_the_artefact_too(self):
+        """The count the older regexes check must be the count the engine emitted."""
+        import io as _io, json, contextlib
+        with contextlib.redirect_stdout(_io.StringIO()):
+            import main
+        with open(self.FACTS, encoding='utf-8') as fh:
+            facts = json.load(fh)
+        self.assertEqual(facts['registry']['n_registered'], len(main.ALL_STRATEGIES),
+                         'run_facts.json is stale against the registry; regenerate it with '
+                         'tools/emit_facts.py')
 
     def test_every_quoted_registry_count_matches_the_registry(self):
         """Catches every phrasing that HAS gone stale, not every number in prose.

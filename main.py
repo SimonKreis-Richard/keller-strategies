@@ -2439,6 +2439,22 @@ def save_outputs(report_str, display_results, config, store=None, metrics_data=N
         plt.close()
         outputs[os.path.basename(chart_path)] = file_sha256(chart_path)
 
+    # The run's own numbers, beside the report that quotes them. Cheap block only:
+
+    # the robustness figures cost 12 870 splits and 2 000 bootstrap paths, so they
+
+    # are regenerated deliberately by tools/emit_facts.py, not on every save.
+
+    from common.facts import build_facts, write_facts
+
+    facts_path = os.path.join(out_dir, f'run_facts_{timestamp}.json')
+
+    write_facts(facts_path, build_facts(metrics_data or [], config=config,
+
+                                        store=store))
+
+    outputs[os.path.basename(facts_path)] = file_sha256(facts_path)
+
     manifest_path = os.path.join(out_dir, f'report_{timestamp}.manifest.json')
     write_manifest(manifest_path, build_manifest(config, store, metrics_data or [],
                                                  outputs=outputs, repo_dir=ROOT_DIR))

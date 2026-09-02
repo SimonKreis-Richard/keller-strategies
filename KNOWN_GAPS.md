@@ -32,9 +32,9 @@ Consequences:
 - Only two genuine equity bear markets sit inside the full window (2007-2009, 2022), and only
   one of those predates most of the leveraged products.
 
-**The effective sample is far shorter than it looks.** 36 variants over ~18 years is not 400
-years of evidence: the report's own participation ratio puts the suite at roughly **3.0
-effective independent bets**, with PC1 explaining ~55% of the variance.
+**The effective sample is far shorter than it looks.** 36<!-- facts:registry.n_registered:int --> variants over ~18 years is not 400
+years of evidence: the report's own participation ratio puts the suite at **2.65<!-- facts:selection.participation_ratio:num2 --> effective
+independent bets**, with PC1 explaining 59.4%<!-- facts:selection.pc1_share:pct1 --> of the variance.
 
 **Leveraged variants have no bear-market history at all.** No 3x product predates 2008-11
 (UPRO 2009-06, TQQQ 2010-02); the 2x products used here mostly start 2006-2007. The regime
@@ -340,13 +340,18 @@ Nothing in this repo can distinguish a 2-year underperformance from a broken str
 `common/robustness.py` computes the probability of backtest overfitting (Bailey, Borwein,
 López de Prado & Zhu 2017) by combinatorially symmetric cross-validation: sixteen blocks of the
 shared 2008-07..2026-06 window, all 12 870 equal splits, in-sample winner looked up
-out-of-sample. **PBO = 42.2%** — better than a coin flip, well short of a procedure you would
-lean on. `HAA_G12` takes the in-sample crown in 57% of splits and `DAA_G6` in 15%, so the top
-row is not even stable, and the resampled leaderboard puts `HAA_G12` in the top three of 87.1%
-of bootstrap histories against 47.0% for the runner-up. (Until 2026-08-02 this paragraph said
-35.9%: the section was netting Sharpes at rf = 0 beside a leaderboard netted at the realised
-~1.2%/yr, which flattered low-vol entries by up to +0.16 Sharpe — AUD-02. The section now nets
-at the run's own rf and prints the rate it used; the worse number is the honest one.)
+out-of-sample. **PBO = 34.9%<!-- facts:robustness.pbo_strategy:pct1 -->** — better than a coin flip, well short of a
+procedure you would lean on. `HAA_G12` takes the in-sample crown in 64.3% of splits and
+`DAA_G6` in 9.3%, so the top row is not stable, and the resampled leaderboard puts `HAA_G12`
+in the top three of 87.4%<!-- facts:robustness.top.0.p_top_k:pct1 --> of bootstrap histories against 48.8% for the runner-up.
+
+Every figure in this section is annotated with the fact it comes from and checked against
+`tests/fixtures/run_facts.json` by `tests/test_paper_rules.py`, so it cannot drift out of the
+prose again — which it has done twice. It read **35.9%** until 2026-08-02, when the section was
+found netting Sharpes at rf = 0 beside a leaderboard netted at the realised rate (AUD-02), and
+**42.2%** until 2026-09-01, when the cache was found holding two adjustment vintages. The
+present figure is measured on repaired data over a window three months longer, so the move
+combines both; it has not been decomposed, and saying so is cheaper than pretending otherwise.
 
 Two limits, and the first is the one that matters:
 
@@ -363,16 +368,16 @@ Two limits, and the first is the one that matters:
   stated assumption, not a simulation.
 
 **The family view sharpens the claim.** Since 2026-08-01 both measurements also run POOLED
-by family and by de-risking mechanism. Measured under the realised rf: pooling improves the
-cross-validation monotonically — strategy-level PBO **42.2%**, family-level **37.2%**,
-mechanism-level **30.4%**, with the exogenous-TIP canary taking the in-sample crown in 71% of
-splits. (Under the pre-AUD-02 rf = 0 convention the family level looked like a step *backwards*
-— 38.0% against 35.9% — an artefact of the rate flattering the low-vol variants that dominate
-their families' medians.) The finding is confirmed by the resampled ranking: the HAA family is
-top-3 in **89.1%** of alternative histories (first in 71.5%), and the two canary mechanisms
-together dominate — dedicated-basket canaries (DAA+BAA+their wraps) are top-3 in 72.4% of
-histories, breadth protection 26.4%, absolute momentum 11.2%, per-asset trend 0.1%. "Hold a
-canary-protected family, and prefer HAA" survives resampling; no finer claim does.
+by family and by de-risking mechanism, and pooling improves the cross-validation
+monotonically: strategy-level PBO **34.9%<!-- facts:robustness.pbo_strategy:pct1 -->**, family-level **32.2%<!-- facts:robustness.pbo_family:pct1 -->**,
+mechanism-level **21.9%<!-- facts:robustness.pbo_mechanism:pct1 -->**. (Under the
+pre-AUD-02 rf = 0 convention the family level looked like a step *backwards* — 38.0% against
+35.9% — an artefact of the rate flattering the low-vol variants that dominate their families'
+medians.) The resampled ranking confirms it: the HAA family is top-3 in **89.3%<!-- facts:robustness.family_rank.HAA.p_top_k:pct1 -->** of alternative
+histories (first in 70.7%<!-- facts:robustness.family_rank.HAA.p_first:pct1 -->), and the two canary mechanisms dominate — dedicated-basket canaries
+(DAA+BAA+their wraps) are top-3 in 72.0% of histories, breadth protection 25.1%, absolute
+momentum 12.7%, per-asset trend 0.2%. "Hold a canary-protected family, and prefer HAA"
+survives resampling; no finer claim does.
 
 **The "Max margin" column depends on which entries you ran.** The multiple-testing haircut
 derives its trial count and Sharpe spread from *the run's* population, so a 3-entry run

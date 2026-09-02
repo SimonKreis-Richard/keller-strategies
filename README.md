@@ -4,7 +4,7 @@
 ![NiceGUI](https://img.shields.io/badge/NiceGUI-3.0%2B-5898D4)
 ![pandas](https://img.shields.io/badge/pandas-2.0%2B-150458?logo=pandas&logoColor=white)
 ![NumPy](https://img.shields.io/badge/NumPy-1.24%2B-013243?logo=numpy&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-502%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-504%20passing-brightgreen)
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)
 
 An open-source Python engine for backtesting and live-execution of state-of-the-art
@@ -106,15 +106,14 @@ environment automatically, later runs start instantly.
   the CLI has printed for months and the dashboard merely *cited* ("the rank correlation
   between disjoint sub-periods is approximately zero" — pointing at a report nobody had open).
   **PBO**, the probability of backtest overfitting, by combinatorially symmetric
-  cross-validation over all 12 870 equal splits of the shared window: **42.2%**, with the
-  in-sample crown going to `HAA_G12` in only 57% of them. And the leaderboard **rebuilt on
-  2 000 resampled histories**, so "rank 1" can be read next to "top three in 87.1% of
+  cross-validation over all 12 870 equal splits of the shared window: **34.9%<!-- facts:robustness.pbo_strategy:pct1 -->**, with the
+  in-sample crown going to `HAA_G12` in only 64.3% of them. And the leaderboard **rebuilt on
+  2 000 resampled histories**, so "rank 1" can be read next to "top three in 87.4%<!-- facts:robustness.top.0.p_top_k:pct1 --> of
   alternative histories" — different claims, now on the same screen. Both measurements also
   run **pooled by family and by de-risking mechanism**, because a family whose every variant
   scores well is harder to explain as luck than one lucky variant: pooling walks the PBO down
-  monotonically (42.2% → 37.2% → 30.4%), the HAA family is top-3 in 89.1% of alternative
-  histories, and the exogenous-TIP canary wins 71% of in-sample splits at the mechanism
-  level. Every figure is net of the run's own realised risk-free rate — the same rate the
+  monotonically (34.9% → 32.2%<!-- facts:robustness.pbo_family:pct1 --> → 21.9%<!-- facts:robustness.pbo_mechanism:pct1 -->), and the HAA
+  family is top-3 in 89.3%<!-- facts:robustness.family_rank.HAA.p_top_k:pct1 --> of alternative histories. Every figure is net of the run's own realised risk-free rate — the same rate the
   leaderboard nets — and the section prints the rate it used. None of it forecasts: a bootstrap draws from the distribution it is
   given, and if these two decades were generous to US assets then so is every resampled path.
 - **A leverage frontier, cross-checking the sizing from an independent direction** — the same
