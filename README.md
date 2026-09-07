@@ -382,6 +382,20 @@ two further Keller-compliance defects then survived two audits and 131 self-cons
 2026-09-01 showed, a suite that only reads frozen fixtures cannot notice that the live data
 layer disagrees with its vendor. That is what `tools/vendor_crosscheck.py` is for.
 
+## 🔧 Tools
+
+Five standalone utilities in [`tools/`](tools). None of them is imported by the engine, and
+none is needed to run a backtest — each is executed directly. Full commands and caveats live
+in each file's module docstring.
+
+| Tool | What it is for |
+|---|---|
+| `backtest_driver.py` | The safe entry point for any measurement. It reads every parameter off `main`, then forces `EXECUTION_MODE` off and drops broker accounts *after* applying caller overrides, so a measurement cannot reach the live order path by accident. Use it instead of `main.py` whenever your `user_config.json` sets `EXECUTION_MODE = True`. |
+| `timing_luck.py` | Month-end rebalancing is one draw from twenty equally defensible schedules. This runs all twenty through the same ledger and reports the spread — what turns a headline drawdown into a distribution. The measured figures live in [`KNOWN_GAPS.md`](KNOWN_GAPS.md), which is their one home; this table says what the tool does, not what it found. |
+| `emit_facts.py` | Regenerates `tests/fixtures/run_facts.json`, the artefact the documentation tests compare prose against. Run it when a figure the docs quote has legitimately moved, and commit the JSON in the same commit as the change that moved it. |
+| `vendor_crosscheck.py` | Compares the cached raw closes against a second vendor, monthly returns plus a split sentinel. **It currently reports `unavailable` for every ticker**: the default source began gating automated access on 2026-09-01, and this tool does not try to defeat that. The comparison machinery and its offline tests are complete; the *source* is unresolved, and `unavailable` is never counted as agreement. |
+| `backup_context.py` | Maintainer-only. It copies this repository's gitignored agent-context files into a separate repository so they have versions. Those files are not in a clone, so on a fresh checkout this tool finds nothing to copy and does nothing. |
+
 ## 🧠 Why momentum?
 
 Momentum is an observation of what markets *actually* do, not a thesis about what they
