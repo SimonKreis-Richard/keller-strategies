@@ -47,7 +47,7 @@ including leveraged-ETF variants and configurable margin.
 - **Desktop dashboard (NiceGUI)** — backtests *and* live whole-share order sizing across multiple broker accounts, in a native window. Double-click `run_dashboard.bat` on Windows, no code required.
 - **Personal settings stay private** — account balances, strategy picks and every user knob live in a gitignored `user_config.json`, never in the code.
 - **Leveraged-ETF execution** — a faithful "wrap pattern" runs the canonical signal on 1x assets and maps the offensive sleeve to real leveraged ETFs (e.g. `SPY → UPRO`), holding the defensive sleeve at 1x. Only universes that execute at a *uniform* multiple are admissible, and the mapper enforces it at construction.
-- **Single external data source** — Yahoo Finance only. No FRED, no macro series, no second provider to keep in sync.
+- **A single external data source, and a second opinion about it** — the engine reads Yahoo Finance and nothing else: no FRED, no macro series, no second provider in the signal path. Since 2026-09-01 `tools/vendor_crosscheck.py` reads a *different* vendor for verification only — no engine path imports it, and it lives outside `tests/` so the suite stays network-free. That tool exists because the price cache was found holding two dividend-adjustment vintages spliced together, invisible to every test in the suite: they all read frozen fixtures, so a data layer wrong in a self-consistent way could not be seen. See [`KNOWN_GAPS.md`](KNOWN_GAPS.md) §2.
 - **An explicit execution model** — fills at the session *after* the signal, one-way cost charged per leg on the notional actually traded, positions that drift between rebalances, uninvested weight in a real cash asset, and margin interest day-counted on the balance actually drawn. None of it implied; all of it configurable.
 - **The engine refuses rather than approximates** — a month whose weights do not sum to 1, or that holds a ticker with no price, raises instead of being recorded as a 0% return. A strategy is never measured over years its own products did not exist: the window is trimmed and the binding ticker is named.
 - **Reports that argue against themselves** — a regime panel showing behaviour in eight named drawdowns (`n/a` where coverage is missing, never a number), the expected best-of-N under the null next to the observed best, and the rank correlation of the leaderboard between disjoint sub-periods. It comes out near zero, and the report says so.
@@ -200,7 +200,7 @@ Detailed per-strategy parameter specs are in [`strategy_specs/`](strategy_specs)
 Requires Python 3.11+.
 
 ```bash
-git clone https://github.com/yourusername/keller-strategies.git
+git clone https://github.com/SimonKreis-Richard/keller-strategies.git
 cd keller-strategies
 
 python -m venv venv
@@ -358,22 +358,29 @@ very universe a wrap must restrict; see `strategies/vaa.py` and `strategies/paa.
 python -m unittest discover -s tests
 ```
 
-Deterministic and network-free. Three categories, and the third is the one that matters:
+Deterministic and network-free. Four categories, and the last two are the ones that matter:
 
 1. **Guards** — what the engine must REFUSE: an incomplete month, a window predating a
    strategy's own products, weights that do not sum to 1, a held ticker with no price, a data
    gap longer than five trading days, a canary reading bullish on missing data, a regime
-   segmentation that leaves a gap or an overlap in the era.
+   segmentation that leaves a gap or an overlap in the era, and a price panel carrying more
+   than one dividend-adjustment vintage.
 2. **Golden master** — 8 strategies × 6 metrics pinned over a frozen daily fixture. If a change
    moves a number this fails *on purpose*; regenerate it in the same commit, with the reason.
 3. **External anchors** — comparisons against things the code did not produce: 13612U checked
    against a closed form written out in the test, HAA's selection and substitution rules
    against baskets worked out by hand, Keller's stated 0.1% one-way cost as arithmetic, and the
    HAA paper's published result shape as a sanity band.
+4. **Paper rules** — each family's selection rule re-derived from hand-built panels and
+   compared against what its paper actually states. This is the category a golden master
+   cannot replace: a golden master says a number moved, never which rule is right.
 
-That third category exists because of what the audit found: before 2026-07-28 all 55 tests
-asserted `f(x) == f(x)`, and every one of them passed against an engine with four critical
-defects. A test that only compares the code to itself adds coverage but no assurance.
+The last two exist because of what the audits found. Before 2026-07-28 all 55 tests asserted
+`f(x) == f(x)`, and every one of them passed against an engine with four critical defects;
+two further Keller-compliance defects then survived two audits and 131 self-consistency tests.
+**A test that only compares the code to itself adds coverage but no assurance** — and, as
+2026-09-01 showed, a suite that only reads frozen fixtures cannot notice that the live data
+layer disagrees with its vendor. That is what `tools/vendor_crosscheck.py` is for.
 
 ## 🧠 Why momentum?
 

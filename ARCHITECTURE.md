@@ -32,10 +32,15 @@ DATA       common/data_engine.py   PriceStore — daily bars, real trading dates
                                    complete months only, provenance hash
 SIGNAL     strategies/*.py         momentum / canary logic -> target weights on the
                                    tickers actually traded (LETF images included)
+           common/letf_mapper.py   the 1x -> LETF translation, and the admission rules it
+                                   enforces AT CONSTRUCTION: one uniform multiple across
+                                   the offensive sleeve, defence never levered
 EXECUTION  common/ledger.py        run_ledger — fill date, fill price, drift, per-leg
                                    cost, cash account, margin and interest
 REPORTING  main.py + common/       metrics, coverage, regimes, selection statistics,
                                    run manifests
+           common/facts.py         the numbers documentation is allowed to quote, emitted
+                                   as an artefact so prose stops caching computation
 SIZING     common/margin_sizing.py what MARGIN leverage a record survives, driven by
            + leverage_advice.py    common/leverage_advice.py. Stands BESIDE the engine:
                                    run_ledger never tests a maintenance requirement
