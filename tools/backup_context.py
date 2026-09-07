@@ -5,15 +5,14 @@ WHY THIS EXISTS
 ---------------
 `AGENTS.md`, `CLAUDE.md`, `SETUP.md`, `memory/PROJECT.md` and the skills are gitignored by
 decision: this repository publishes the software, not the working notes about how it is
-developed. The consequence is that the project's decision record is **unversioned**, and it
-is the only record left — the git history was squashed to a single commit on 2026-08-29, and
-the agent harness's private memory was orphaned the same day when the project folder moved.
-Two of the three context stores were lost in a single day; the third currently exists in one
-copy, on one disk, with no history.
+developed. So the decision record is not in the repository, and the published history is a
+single commit by choice — this project's git history is a presentation surface, not a
+forensic one.
 
-This copies that bundle into a separate repository so it has versions and can live somewhere
-else. It is deliberately a SEPARATE repo rather than a branch: a branch of the public
-repository would be public, which is the thing the gitignore rules exist to prevent.
+That leaves the bundle as the one place the reasoning is written down, and it is worth
+copying for the same reason any working file is. This makes that copy a command rather than a
+manual chore. It is deliberately a SEPARATE repo rather than a branch: a branch of the public
+repository would be public, which is exactly what the ignore rules exist to prevent.
 
 USAGE
 -----
@@ -21,10 +20,11 @@ USAGE
     venv/Scripts/python.exe -m tools.backup_context --dest "D:/backups/ks-context"
 
 Defaults to a sibling directory `keller-strategies-context`. It initialises the repo on
-first run and commits on every run; it never adds a remote and never pushes. Making this
-leave the machine is a decision for the owner, not a side effect of running a script -- the
-bundle describes their positions and their reasoning, and where that goes is theirs to
-choose. The command to do it is printed at the end.
+first run and commits on every run; it never adds a remote and never pushes. That is
+deliberate and settled: the bundle describes the owner's positions and reasoning, so where it
+goes is their call, and as of 2026-09-07 the answer is that a synced disk is enough. Do not
+propose an off-machine backup again unless asked -- the requirement is a copy, not an
+archive.
 """
 import argparse
 import datetime as _dt
