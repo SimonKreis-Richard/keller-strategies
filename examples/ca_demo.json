@@ -1,0 +1,97 @@
+{
+  "_comment": "DEMONSTRATION ONLY. The capital is FICTIONAL (100,000 CAD, no USD, nothing held). The signals, closes and exchange rates are RECORDED from the sources named in each month, so the demonstration runs offline and reproduces examples/ca_rotation_demo.csv exactly. Not advice, not a track record.",
+  "cash": {
+    "CAD": 100000.0,
+    "USD": 0.0
+  },
+  "execution": {
+    "leverage": 1.0,
+    "prefer_usd_units": true,
+    "fx_cost_bps": 0.2,
+    "fx_cost_min_usd": 2.0,
+    "min_trade_pct": 0.0
+  },
+  "months": [
+    {
+      "signal_date": "2026-07-31",
+      "signal_source": "HAA_G12 as the engine computed it from its own price store on 2026-09-23 (tools.backtest_driver panel)",
+      "weights": {
+        "DBC": 0.166666666667,
+        "EWJ": 0.166666666667,
+        "IWM": 0.166666666667,
+        "SPY": 0.166666666667,
+        "VGK": 0.166666666667,
+        "VNQ": 0.166666666667
+      },
+      "canary": {
+        "TIP": 0.002218
+      },
+      "prices_source": "Yahoo Finance close on 2026-07-31 (raw Close, not adjusted)",
+      "prices": {
+        "CGL.C": 47.43,
+        "CGR": 33.82,
+        "UBIL.U": 50.02,
+        "XEC": 42.38,
+        "XEC.U": 31.14,
+        "XEU": 41.4,
+        "ZCOM": 36.08,
+        "ZIC": 18.19,
+        "ZIC.U": 13.2,
+        "ZJPN": 49.63,
+        "ZNQ": 128.19,
+        "ZNQ.U": 61.82,
+        "ZSML": 53.77,
+        "ZSML.U": 50.92,
+        "ZSP": 114.97,
+        "ZSP.U": 82.05,
+        "ZTL": 35.69,
+        "ZTL.U": 33.28,
+        "ZTM": 48.19,
+        "ZTM.U": 45.08
+      },
+      "fx": {
+        "usdcad": 1.4029,
+        "source": "Bank of Canada Valet FXUSDCAD",
+        "as_of": "2026-07-31"
+      }
+    },
+    {
+      "signal_date": "2026-08-31",
+      "signal_source": "HAA_G12 as the engine computed it from its own price store on 2026-09-23 (tools.backtest_driver panel)",
+      "weights": {
+        "BIL": 1.0
+      },
+      "canary": {
+        "TIP": -0.003978
+      },
+      "prices_source": "Yahoo Finance close on 2026-08-31 (raw Close, not adjusted)",
+      "prices": {
+        "CGL.C": 51.51,
+        "CGR": 32.36,
+        "UBIL.U": 50.015,
+        "XEC": 44.17,
+        "XEC.U": 32.85,
+        "XEU": 41.37,
+        "ZCOM": 38.49,
+        "ZIC": 17.96,
+        "ZIC.U": 13.16,
+        "ZJPN": 50.47,
+        "ZNQ": 131.92,
+        "ZNQ.U": 64.19,
+        "ZSML": 53.36,
+        "ZSML.U": 50.92,
+        "ZSP": 116.83,
+        "ZSP.U": 84.17,
+        "ZTL": 35.57,
+        "ZTL.U": 33.7,
+        "ZTM": 47.7,
+        "ZTM.U": 45.2
+      },
+      "fx": {
+        "usdcad": 1.3866,
+        "source": "Bank of Canada Valet FXUSDCAD",
+        "as_of": "2026-08-31"
+      }
+    }
+  ]
+}

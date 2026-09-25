@@ -1,0 +1,72 @@
+# Environments
+venv/
+env/
+.env
+.venv
+test_env/
+tmp_venv/
+
+# Python caching
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Personal settings (account balances, strategy picks...) — never committed
+user_config.json
+# The Canadian execution book (tools/ca_orders.py): real cash and real holdings. The template
+# beside it, ca_execution.example.json, is fictional and IS tracked.
+ca_execution.json
+
+# Temporary data and logs
+*.csv
+*.log
+*.sqlite
+backtest_results/*
+!backtest_results/.gitkeep
+data/cache/
+# Signal and execution journals. The Canadian rotation registry records real quantities and
+# real dollar values per account, so this is `user_config.json`-class material and is ignored
+# as a DIRECTORY rather than by extension: `*.csv` and `*.log` above would have covered the
+# registry itself and left a `logs/*.json` or a README as the one file `git add -A` would
+# have staged into a public repository. That is exactly how 0-inbox/ got here.
+logs/
+
+# Frozen test fixtures ARE tracked: the golden master and the guard regression tests
+# are worthless if the data underneath them can drift. See tests/fixtures/MANIFEST.md.
+!tests/fixtures/*.csv
+# The HAA_G12_CA demonstration: fictional capital, recorded public prices. Tracked because
+# tests/test_ca_orders.py requires the code to reproduce it byte for byte.
+!examples/*.csv
+
+# The source papers. SSRN's terms allow a personal download, not a public copy, so they stay
+# on the maintainer's machine; README.md and strategy_specs/ link each one on SSRN.
+academic-papers/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Agent tooling and project context -- LOCAL ONLY, never published.
+# This repository is public. The agent guides, the decision record and the skills describe
+# how this project is worked on and what its owner decided and why; they are working
+# material, not part of the software anyone clones. Everything in this block stays on the
+# machine. (The software's own install and usage instructions live in README.md, which IS
+# public -- do not move them in here.)
+.claude/
+.agents/
+AGENTS.md
+CLAUDE.md
+SETUP.md
+memory/
+# Staging areas for material arriving from another session or harness. Nothing lands here
+# already reviewed, so it is ignored by default rather than published by accident: on
+# 2026-09-17 a dropped context bundle left its README as the one file in the tree that
+# `git add -A` would have staged.
+0-inbox/
+agent/
+
+# OS config
+.DS_Store
+Thumbs.db

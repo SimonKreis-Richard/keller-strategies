@@ -1,0 +1,16 @@
+{
+  "_comment": "Template for tools/ca_orders.py. Copy to ca_execution.json (gitignored, like user_config.json) and replace the FICTIONAL figures below with your own. cash: what the account holds in each currency. positions: Canadian execution tickers only (common/ca_mapping.py), whole units; the currency is read from the table. execution.leverage above 1.0 is refused (EXEC-001). prefer_usd_units spends USD already in the account on a fund's .U class and never converts CAD to reach one. usdcad: null to look the rate up, or a number to fix it. prices: optional per-ticker overrides that win over the downloaded close.",
+  "cash": {"CAD": 100000.0, "USD": 0.0},
+  "positions": [
+    {"ticker": "ZSP", "qty": 100}
+  ],
+  "execution": {
+    "leverage": 1.0,
+    "prefer_usd_units": true,
+    "fx_cost_bps": 0.2,
+    "fx_cost_min_usd": 2.0,
+    "min_trade_pct": 0.0
+  },
+  "usdcad": null,
+  "prices": {}
+}
