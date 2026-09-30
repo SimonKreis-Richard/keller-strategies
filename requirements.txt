@@ -1,0 +1,13 @@
+yfinance>=0.2.28
+# 2.2, not 2.0: `pct_change` defaulted to fill_method='pad' through 2.1, which forward-fills
+# a gap BEFORE differencing. On this panel that resurrects a delisted product's last price
+# into a live momentum score -- undoing exactly what _apply_stale_policy writes NaN for. The
+# call sites now pass fill_method=None explicitly, so the floor is belt and braces; see
+# tests/test_paper_rules.py::TestMomentumMissingData. requirements.lock pins the exact
+# versions a published number was produced with.
+pandas>=2.2.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+nicegui>=3.0.0
+# Optional, for the GUI's native desktop window (otherwise it opens in your browser):
+# pip install pywebview

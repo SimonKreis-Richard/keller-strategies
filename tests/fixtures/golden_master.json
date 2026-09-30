@@ -1,0 +1,117 @@
+{
+  "description": "Frozen engine output over tests/fixtures/frozen_daily_*.csv. This is a ratchet, not a correctness claim: it exists so that any number the engine moves is visible and attributable. Regenerate ONLY in the same commit as the behaviour change that moved it, and append the reason to `history`.",
+  "fixture": "frozen_daily_adj_close.csv",
+  "history": [
+    {
+      "commit": "69e3ba6",
+      "date": "2026-07-28",
+      "reason": "Initial recording of PRE-refactor behaviour, over the monthly fixture frozen_prices_2026-06-08.csv: same-bar execution (the signal close WAS the fill price), cost = sum|dw|/2 x 0.1% (half of one-way), no cash account, no position drift, rf = 0, drawdown measured after the first return, and a window silently shifted 13 months by the warm-up drop. For the record, that run reported HAA_G12 cagr 0.105055 / max_dd -0.047431 / sharpe 1.387036 / sortino 2.774497 / vol 0.074267 and SPY_Benchmark cagr 0.151881 / sharpe 0.998008, over an actual window of 2016-02..2024-12."
+    },
+    {
+      "commit": "TG2 cutover",
+      "date": "2026-07-28",
+      "reason": "Re-recorded against the execution ledger, on a NEW daily fixture (frozen_daily_adj_close/open.csv, 2012-01..2025-01) because an open-priced fill cannot be expressed on a monthly panel. Five changes moved the numbers, all deliberate: (1) fills at the next session's OPEN instead of the signal's own close; (2) cost 0.1% PER LEG on notional actually traded, i.e. 2x the old charge on a full rotation, plus initial deployment and terminal liquidation; (3) uninvested weight earns BIL instead of 0%; (4) Sharpe/Sortino net of a realised BIL risk-free rate instead of zero; (5) the measured window is the requested one -- warm-up is enforced by the coverage guard, not by silently dropping 13 result rows. Illustrative deltas on the same request (2015-01..2025-01, different fixture so not a like-for-like diff): HAA_G12 sortino 2.77 -> 1.91, SPY_Benchmark cagr 15.19% -> 12.99% (the old figure excluded the flat 2015 that the request had asked for). UPI added."
+    },
+    {
+      "change": "RENAME ONLY, no number moved. PAA_G12_V2 -> PAA2_G12. PAA2 is Keller & Butler's own model name for the a=2 (high-protection) variant, which the paper designates as its conclusion; the old key read like a second version of the code. Every metric verified byte-identical before regenerating.",
+      "date": "2026-07-29"
+    },
+    {
+      "commit": "METH-002",
+      "date": "2026-07-29",
+      "reason": "SMA(12) now averages THIRTEEN prices, not twelve. Keller defines the filter by its LAG count, not its price count: BAA (SSRN 4166845) n.5 says the SMA(12) momentum \"equals the present price pt divided by the average of the last 13 asset prices including the present (also noted as SMA13), minus 1\". Keller & Butler state the same thing from the other side (PAA, SSRN 2759734, §1): the filter is a linearly decreasing weight over the previous 12 monthly returns, the most recent weighted 12 down to the oldest weighted 1. Thirteen prices produce exactly those weights; twelve produce (11,10,...,1,0), dropping the oldest month and spanning eleven returns instead of twelve. Every SMA12 consumer moves: BAA's offensive Top-6 and Top-1 ranking, its defensive Top-3 ranking, its absolute test against BIL's own SMA12, and PAA's breadth count and therefore its bond fraction. Deltas here: BAA_G12 cagr +0.0015 / sortino +0.0435 / upi +0.1034; PAA2_G12 cagr -0.0043 / max_dd -0.1958 -> -0.1824 / sortino -0.1079. HAA, VAA, DAA and SPY_Benchmark are unmoved — none of them uses SMA12. Anchored from both directions by tests/test_paper_rules.py::TestSMAWindows, which also pins Faber's SMA(10) at ten prices so the two conventions cannot be 'made consistent'."
+    },
+    {
+      "commit": "METH-001",
+      "date": "2026-07-29",
+      "reason": "DAA's Top-T is now sign-agnostic, as the paper defines it. The code filtered the offensive universe to strictly-positive 13612W before taking the top T, which is absolute momentum -- and Keller & Keuning (SSRN 3212862) decline it three times: §8 \"we did not eliminate bad assets in the top T selection of risky assets\", the Conclusions \"EW-Top T (T<=N, long only), without intrinsic or absolute momentum\", and n.17, which records absolute momentum on the risky top T as an alternative they TRIED and did not adopt. The canary alone sets the cash fraction; offensive breadth never touches the allocation, which is what separates DAA from VAA. Measured over the full cached history the old rule diverged from the paper's in 4.1% of DAA_G12's months, 15.7% of DAA_G4's and 31.2% of DAA_G6's, concentrated in 2008-11..2009-03 and 2020-03. Deltas here: DAA_G12 cagr +0.0062 / sortino +0.1747 / upi +0.1028; DAA_G3_Leveraged_2X cagr +0.0685 / sortino +0.2928 (a wrap amplifies the same signal change). BAA, PAA, HAA, VAA and SPY_Benchmark are unmoved. The identical `> 0` pattern in vaa.py is deliberately LEFT IN PLACE: it is provably unreachable at VAA's registered T/B, and VAA's breadth count is its own crash signal. Anchored by tests/test_paper_rules.py::TestDAASelectionRule."
+    },
+    {
+      "commit": "RULE-4/RULE-5",
+      "date": "2026-07-29",
+      "reason": "Composition change only: the LETF-wrap slot moved from DAA_G3_Leveraged_2X to HAA_G3_Leveraged_2X because the former was deleted under RULE 5 (T=1 < B=2 rounded a lone dead canary down to zero de-risking, so it held 2x equity through COVID for -35.1%). NOT ONE OTHER NUMBER MOVED: every faithful entry reproduced to 1e-9, which is the evidence that adding the HAA wraps and deleting the VAA/PAA ones changed no existing behaviour."
+    },
+    {
+      "commit": "VAA-N11",
+      "date": "2026-07-29",
+      "reason": "VAA_G12 switched from EEM/IYR to VWO/VNQ, the funds footnote 11 says Keller actually backtested. Only VAA_G12 moved, and it moved DOWN: CAGR 3.53% -> 3.03%, MaxDD -27.03% -> -28.03%, Sortino 0.392 -> 0.306, UPI 0.157 -> 0.114. A ticker correction that costs performance is a correction, not a fit. Coverage unchanged: VWO is chain-linked from EEM by HISTORY_BACKFILL and VNQ predates the binding HYG."
+    },
+    {
+      "commit": "RULE5-CONSTRUCTIVE",
+      "date": "2026-07-29",
+      "reason": "DAA leveraged wraps now compute T = max(1, n//2, B) instead of max(1, n//2), and DAA_G3_Leveraged_2X was restored after being deleted earlier the same day. RULE 5 was written as a filter that refuses T < B; it reads better as a rule that CHOOSES T. ZERO movement expected and zero observed on every entry in this fixture: DAA_G4_Leveraged_2X already had n//2 = 2 >= B = 2, so the floor is inactive for it, and no other golden entry has a cash ladder. The restored G3 is NOT in this fixture (frozen_daily_adj_close.csv is unchanged). Measured on the restored variant, T=1 -> T=2: MaxDD -46.58% -> -35.70%, COVID -35.07% -> -15.99%, CAGR 22.89% -> 19.05%. It ranks seventh of nine on Sortino."
+    },
+    {
+      "commit": "THREE-X-AND-BENCHMARKS",
+      "date": "2026-07-29",
+      "reason": "Registry 23 -> 35: four passive references (Sixty_Forty_1X, SPY_2X_Benchmark, SPY_3X_Benchmark, RiskParity_3X) and eight 3x wraps. ZERO movement expected and observed on every faithful entry in this fixture: the new entries are additions, and none of them is in the golden set (frozen_daily_adj_close.csv has SSO/QLD/UWM but no UPRO/TMF/TNA/EDC). Two behaviour changes DID land and neither touches a golden row: (1) BaseStrategy.role now derives exploratory from leverage>=3, so the eight 3x entries are excluded from the selection statistics -- trial count 18 -> 19 despite twelve new rows; (2) assert_no_dual_role_mixes_the_sleeve now refuses a levered universe containing a dual-role asset, which validate_universe could not see because it is handed the post-exclusion set. That guard newly refuses BAALeveraged([SPY,QQQ,IWM,TLT], 3) -- previously constructible with TLT silently held at 1x beside TNA at 3x. No registered entry was affected. Also: may_set_ranked_window now bars anything holding a leveraged product from setting the shared window regardless of fidelity label, so the ranked window stayed at 2008-07 rather than being dragged to 2010 by UPRO."
+    }
+  ],
+  "metrics": {
+    "BAA_G12": {
+      "cagr": 0.051238,
+      "max_dd": -0.10471,
+      "sharpe": 0.541487,
+      "sortino": 0.900935,
+      "upi": 0.813046,
+      "vol": 0.066985
+    },
+    "DAA_G12": {
+      "cagr": 0.040687,
+      "max_dd": -0.183755,
+      "sharpe": 0.356643,
+      "sortino": 0.552745,
+      "upi": 0.324107,
+      "vol": 0.074884
+    },
+    "HAA_G12": {
+      "cagr": 0.087176,
+      "max_dd": -0.048864,
+      "sharpe": 0.99295,
+      "sortino": 1.910912,
+      "upi": 3.604364,
+      "vol": 0.07082
+    },
+    "HAA_G3_Leveraged_2X": {
+      "cagr": 0.202548,
+      "max_dd": -0.353168,
+      "sharpe": 0.803416,
+      "sortino": 1.326872,
+      "upi": 2.362514,
+      "vol": 0.250379
+    },
+    "HAA_G8_Balanced": {
+      "cagr": 0.081955,
+      "max_dd": -0.066448,
+      "sharpe": 0.837965,
+      "sortino": 1.525711,
+      "upi": 2.601729,
+      "vol": 0.078842
+    },
+    "PAA2_G12": {
+      "cagr": 0.05037,
+      "max_dd": -0.182447,
+      "sharpe": 0.500228,
+      "sortino": 0.757817,
+      "upi": 0.534816,
+      "vol": 0.071508
+    },
+    "SPY_Benchmark": {
+      "cagr": 0.129928,
+      "max_dd": -0.233129,
+      "sharpe": 0.741718,
+      "sortino": 1.117165,
+      "upi": 1.718456,
+      "vol": 0.161602
+    },
+    "VAA_G12": {
+      "cagr": 0.030339,
+      "max_dd": -0.280274,
+      "sharpe": 0.200153,
+      "sortino": 0.305821,
+      "upi": 0.113757,
+      "vol": 0.089086
+    }
+  },
+  "window": "2015-01-01 .. 2025-01-01 (as REQUESTED; the engine reports its actual measured window separately)"
+}
